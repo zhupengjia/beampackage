@@ -257,6 +257,7 @@ class decode:
 		    else:    
 			bpmrawbranch=[trees[runpath].GetBranch(l) for l in bpmrawleaf]
 			lbpmrawleaf=[b.GetLeaf("data") for b in bpmrawbranch]
+		    lbpmrawleaf[0].GetNdata()
 		except:
 		    raise Exception("Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0])
 	    if self.pklon["curr"]:
@@ -264,26 +265,35 @@ class decode:
 		    try:
 			hapbcmrawbranch=[trees[runpath].GetBranch(l) for l in hapbcmrawleaf]
 			lhapbcmrawleaf=[b.GetLeaf("data") for b in hapbcmrawbranch]
+			lhapbcmrawleaf[0].GetNdata()
 		    except:
 			print "Error!! no leaf %s in your rootfile!!"%hapbcmrawleaf[0]
 			print "will try to use scaler bcm info instead since you didn't replay happex bcm info"
 			hapbcmavailall=False
 		if not hapbcmavailall:
-		    try:lscalerbcmrawleaf=[trees[runpath].GetLeaf(scalerbcmrawleaf[i]) for i in range(2)]
+		    try:
+			lscalerbcmrawleaf=[trees[runpath].GetLeaf(scalerbcmrawleaf[i]) for i in range(2)]
+			lscalerbcmrawleaf[0].GetNdata()
 		    except:
 			raise Exception("Error!! no leaf %s in your rootfile!!"%scalerbcmrawleaf[0])
 	    hapavail=any([self.pklon[v] for v in ["rbpm","curr","hapevent"]])
 	    if hapavail:
-		try:lnumringleaf=trees[runpath].GetLeaf(numringleaf)
+		try:
+		    lnumringleaf=trees[runpath].GetLeaf(numringleaf)
+		    lnumringleaf.GetNdata()
 		except:
 		    raise Exception("Error!! no leaf %s in your rootfile!!"%numringleaf)
 	    if self.pklon["clock"]:
-		try:lclkrawleaf=trees[runpath].GetLeaf(clkrawleaf)
+		try:
+		    lclkrawleaf=trees[runpath].GetLeaf(clkrawleaf)
+		    lclkrawleaf.GetNdata()
 		except:
 		    print "Error!! no leaf %s in your rootfile!will leave it as empty!"%clkrawleaf
 		    self.pklon["clock"]=False
 	    if self.pklon["raster"]:
-		try:lrasterrawleaf=[trees[runpath].GetLeaf(rasterrawleaf[i]) for i in range(4)]
+		try:
+		    lrasterrawleaf=[trees[runpath].GetLeaf(rasterrawleaf[i]) for i in range(4)]
+		    lrasterrawleaf[0].GetNdata()
 		except:
 		    print "Error!! no leaf %s in your rootfile!will leave it as empty!"%rasterrawleaf[0]
 		    self.pklon["raster"]=False
