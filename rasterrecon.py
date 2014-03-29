@@ -1,32 +1,32 @@
 #!/usr/bin/env python
-import re,os,time,glob,sys
+import re,os,time,glob,sys,numpy
 try:import cPickle as pickle
 except:import pickle
-from ROOT import TFile,gROOT,gPad,TCanvas,TF1,TH1F,TGraph,TMath,sin,sqrt,TTree,TFile,TObject,TChain
+try:import ROOT
+except:print "Error!! pyroot didn't compiled! please recompile your root!"
 from array import array
-from bpmcalib import sortrun
 from harppos import bpmpos
-from runinfo import runinfo
+from runinfo import runinfo,getpklpath,sortrun
 from bpminsert import tgtpos_straight,tgtpos_field,bpminsertparaprep
-from signalfilter import decodefromrootfile
-PI=TMath.Pi()
+from signalfilter import decode
 
 class rasterrecon:
     def __init__(self):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	self.fastclkrate=103910
 	#self.fastclkrate=103858
-	self.shape=TF1("pol1","pol1")
+	self.shape=ROOT.TF1("pol1","pol1")
 	self.rastertype=""
 	self.rasterchan=[0,1]#chan in pkl file
 	
-    def runinit(self,runpath):
+    def runinit(self,runpath=False,forcefastbus=False):
 	self.rootpath,runfilename=os.path.split(runpath)
 	self.run=int(re.split("[_]",re.split("[.]",runfilename)[-2])[-1])
-	self.arm="L" if self.run<20000 else "R"
-	self.clkpkl=os.path.join(self.rootpath,"pkl/bpmraw_clock_%i.pkl"%self.run)
+	self.pklpath=getpklpath(rootpath)
+	self.clkpkl=self.pklpath.getpath("raw","clock",self.run)
 	if not os.path.exists(self.clkpkl):
-	    decodefromrootfile(runpath)
+	    d=decode(runpath,forcefastbus=forcefastbus)
+	    d.autodecode()
 	if not os.path.exists(self.clkpkl):
 	    print self.clkpkl
 	    print "sorry no clock info in rootfile,please replay again"
@@ -37,15 +37,20 @@ class rasterrecon:
 	
     #general get size function
     def gengetsize(self,multifits,chan,eventrange=[0,1000000000]):
-	c1=TCanvas("c1","%s raster size"%self.rastertype,800,600)
+	c1=ROOT.TCanvas("c1","%s raster size"%self.rastertype,800,600)
 	if chan<4:
-	    h1=TH1F("h1","raster size",100,min(self.rasterraw[chan]),max(self.rasterraw[chan]))
+	    h1=ROOT.TH1F("h1","raster size",100,min(self.rasterraw[chan]),max(self.rasterraw[chan]))
 	    for i in range(eventrange[0],eventrange[1]):
 		h1.Fill(self.rasterraw[chan][i])
 	else:
-	    h1=TH1F("h1","raster size at bpm",100,min(self.bpmpos[int((chan-4)%2)][int((chan-4)/2)]),max(self.bpmpos[int((chan-4)%2)][int((chan-4)/2)]))
-	    for i in range(eventrange[0],eventrange[1]):
-		h1.Fill(self.bpmpos[int((chan-4)%2)][int((chan-4)/2)][i])
+	    ab=int((chan-4)%2)
+	    xy=int((chan-4)/2)
+	    pos=self.bpmpos[ab][xy][eventrange[0]:eventrange[1]]+(self.bpmavail[eventrange[0]:eventrange[1]]*1e8-1e8)
+	    pos=pos[pos>-100]
+	    posmean=numpy.mean(pos)
+	    posrms=numpy.sqrt(numpy.mean(pow(pos-posmean,2)))
+	    h1=ROOT.TH1F("h1","raster size at bpm",300,posmean-3*posrms,posmean+3*posrms)
+	    for p in pos:h1.Fill(p)
 	#par:c center,r radius,a entries amplitude
 	def shapefit(h1,c0,c1,r0,r1,a0,a1,e1,e2):
 	    self.shape.SetParLimits(0,c0,c1)
@@ -66,12 +71,17 @@ class rasterrecon:
 	#multitimes fit:
 	c,r,a=multifits(h1,shapefit,c,r,a,xmin,xmax,hmax)
 	#if not os.path.exists("pic"):os.makedirs("pic")
-	#c1.Print("pic/%srastersize_%i_%i_%i_%i.png"%(self.rastertype,chan,self.run,eventrange[0],eventrange[1]),"png")
+	if chan<4:
+	    c1.Print("pic/%srastersize_%i_%i_%i_%i.png"%(self.rastertype,chan,self.run,eventrange[0],eventrange[1]),"png")
+	else:
+	    ab="a" if ab==0 else "b"
+	    xy="x" if xy==0 else "y"
+	    c1.Print("pic/%sbpm%s%ssize_%i_%i_%i.png"%(self.rastertype,ab,xy,self.run,eventrange[0],eventrange[1]),"png")
 	#c1.WaitPrimitive()
 	return {"radius":r,"center":c}
     
     def getsize(self,eventrange=[0,1000000000]):
-	self.rasterpkl=os.path.join(self.rootpath,"pkl/bpmraw_raster_%i.pkl"%self.run)
+	self.rasterpkl=self.pklpath.getpath("raw","raster",self.run)
 	if not os.path.exists(self.rasterpkl):
 	    print "sorry no raster info in rootfile,please replay again"
 	    return False
@@ -83,13 +93,15 @@ class rasterrecon:
 	return self.size
 
     def getsizeinbpm(self,eventrange=[0,1000000000]):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	bpms=["a","b"]
 	self.bpmpkl,self.bpmpos=[],[]
 	for ab in bpms:
-	    self.bpmpkl.append(os.path.join(self.rootpath,"pkl/bpmpos_fbpm%srot_%i.pkl"%(ab,self.run)))
+	    self.bpmpkl.append(self.pklpath.getpath("pos","fbpm%srot"%ab,self.run))
 	    self.bpmpos.append(pickle.load(open(self.bpmpkl[-1],"rb")))
+	    self.bpmavailpkl=self.pklpath.getpath("raw","fbpmavail",self.run)
+	    self.bpmavail=pickle.load(open(self.bpmavailpkl,"rb"))
 	self.sizeinbpm=[]
 	for i in range(2):#x,y
 	    self.sizeinbpm.append([])
@@ -106,7 +118,7 @@ class slrecon(rasterrecon):
 	self.phase=[0,0]
 	self.fitclockrate=[0,0] #fast clock rate calculated from fit
 	#par:0 center,1 radius,2 entries radius
-	self.shape=TF1("shape","[2]*sqrt(1-1/([1]*[1])*(x-[0])*(x-[0]))") #oval
+	self.shape=ROOT.TF1("shape","[2]*sqrt(1-1/([1]*[1])*(x-[0])*(x-[0]))") #oval
 	self.rastertype="slow"
 	self.rasterchan=[2,3]
 	
@@ -125,32 +137,32 @@ class slrecon(rasterrecon):
 	#par:am phase,phase,am period,period,max am,center am,fastclkrate
 	if not(par[2] and par[3] and par[6]):return -10000000
 	time=x[0]/par[6]
-	a=par[4]/sqrt(par[2]) #normalize
+	a=par[4]/numpy.sqrt(par[2]) #normalize
 	#time=x[0]
 	dp=(time+par[0])%(par[2]*4)
 	if dp<=par[2]:
-	    am=sqrt(dp)
+	    am=numpy.sqrt(dp)
 	elif dp>par[2] and dp<=par[2]*2:
 	    
-	    am=sqrt(abs(2*par[2]-dp))
+	    am=numpy.sqrt(abs(2*par[2]-dp))
 	elif dp>par[2]*2 and dp<=par[2]*3:
-	    am=-sqrt(abs(-2*par[2]+dp))
+	    am=-numpy.sqrt(abs(-2*par[2]+dp))
 	else:
-	    am=-sqrt(abs(4*par[2]-dp))
-	return a*am*sin(2*PI*time/par[3]+par[1])+par[5]
+	    am=-numpy.sqrt(abs(4*par[2]-dp))
+	return a*am*numpy.sin(2*numpy.pi*time/par[3]+par[1])+par[5]
     	
     def getphase(self,eventrange=[0,1000000000]):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	clkrange=[self.clkraw[eventrange[0]],self.clkraw[eventrange[1]-1]]
 	clkoffset=self.clkraw[eventrange[0]]
 	#clkoffset=0
 	clkrawoff=array("d",[a-clkoffset for a in self.clkraw[eventrange[0]:eventrange[1]]])
-	wave=TF1("wave",self.__slrasterfunc,clkrange[0],clkrange[1],7)
+	wave=ROOT.TF1("wave",self.__slrasterfunc,clkrange[0],clkrange[1],7)
 	for i in range(0,2):
-	    h1=TGraph(eventrange[1]-eventrange[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange[0]:eventrange[1]])
+	    h1=ROOT.TGraph(eventrange[1]-eventrange[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange[0]:eventrange[1]])
 	    wave.SetParLimits(0,-2*self.amperiod,2*self.amperiod)
-	    wave.SetParLimits(1,-PI,PI)
+	    wave.SetParLimits(1,-numpy.pi,numpy.pi)
 	    wave.FixParameter(2,self.amperiod)
 	    wave.FixParameter(3,self.period)
 	    wave.FixParameter(4,self.size[i]["radius"])
@@ -160,28 +172,28 @@ class slrecon(rasterrecon):
 	    self.amphase[i]=wave.GetParameter(0)
 	    self.phase[i]=wave.GetParameter(1)
 	    amphaseoffset=(clkoffset/self.fastclkrate)%(self.amperiod*4)
-	    phaseoffset=2*PI*((clkoffset/self.fastclkrate)%self.period)/self.period
+	    phaseoffset=2*numpy.pi*((clkoffset/self.fastclkrate)%self.period)/self.period
 	    self.amphase[i]=self.amphase[i]-amphaseoffset
 	    self.phase[i]=self.phase[i]-phaseoffset
 	    #c1.Print("pic/%srastershape_%i_%i_%i_%i.png"%(self.rastertype,self.rasterchan[i],self.run,eventrange[0],eventrange[1]),"png")
 	return self.amphase,self.phase
     
     def getphase2(self,eventrange=[0,1000000000]):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	eventrange0=[eventrange[0],eventrange[0]+2000]
 	clkrange0=[self.clkraw[eventrange0[0]],self.clkraw[eventrange0[1]]]
-	wave0=TF1("wave0",self.__slrasterfunc,clkrange0[0],clkrange0[1],7)
+	wave0=ROOT.TF1("wave0",self.__slrasterfunc,clkrange0[0],clkrange0[1],7)
 	for i in range(0,2):
-	    c1=TCanvas("c1","%s raster phase"%self.rastertype,800,600)
+	    c1=ROOT.TCanvas("c1","%s raster phase"%self.rastertype,800,600)
 	    #first fit, for phase
 	    print "xy=%i,fit first time,for phase"%(i)
 	    clkoffset=self.clkraw[eventrange0[0]]
 	    clkrawoff=array("d",[a-clkoffset for a in self.clkraw[eventrange0[0]:eventrange0[1]]])
-	    h0=TGraph(eventrange0[1]-eventrange0[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange0[0]:eventrange0[1]])
+	    h0=ROOT.TGraph(eventrange0[1]-eventrange0[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange0[0]:eventrange0[1]])
 	    #h0.Draw("AL")
 	    wave0.SetParLimits(0,-2*self.amperiod,2*self.amperiod)
-	    wave0.SetParLimits(1,-PI,PI)
+	    wave0.SetParLimits(1,-numpy.pi,numpy.pi)
 	    wave0.FixParameter(2,self.amperiod)
 	    wave0.FixParameter(3,self.period)
 	    wave0.FixParameter(4,self.size[i]["radius"])
@@ -191,7 +203,7 @@ class slrecon(rasterrecon):
 	    self.amphase[i]=wave0.GetParameter(0)
 	    self.phase[i]=wave0.GetParameter(1)
 	    amphaseoffset=(clkoffset/self.fastclkrate)%(self.amperiod*4)
-	    phaseoffset=2*PI*((clkoffset/self.fastclkrate)%self.period)/self.period
+	    phaseoffset=2*numpy.pi*((clkoffset/self.fastclkrate)%self.period)/self.period
 	    self.amphase[i]=self.amphase[i]-amphaseoffset
 	    self.phase[i]=self.phase[i]-phaseoffset
 	    #second fit,for fast clock rate
@@ -206,13 +218,13 @@ class slrecon(rasterrecon):
 	    while(eventrange[1]-eventrange1[1]>2000 and eventrange1[1]<eventrange[0]+100000):
 		print "xy=%i,fit %i time,for fast clock rate,eventrange:%i~%i,raterange:%f+-%f"%(i,fittimes+1,eventrange1[0],eventrange1[1],self.fitclockrate[i],raterange)
 		clkrange1=[self.clkraw[eventrange1[0]],self.clkraw[eventrange1[1]]]
-		wave1=TF1("wave1",self.__slrasterfunc,clkrange1[0],clkrange1[1],7)
+		wave1=ROOT.TF1("wave1",self.__slrasterfunc,clkrange1[0],clkrange1[1],7)
 		clkoffset=self.clkraw[eventrange1[0]]
 		clkrawoff=array("d",[a-clkoffset for a in self.clkraw[eventrange1[0]:eventrange1[1]]])
-		h1=TGraph(eventrange1[1]-eventrange1[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange1[0]:eventrange1[1]])
+		h1=ROOT.TGraph(eventrange1[1]-eventrange1[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange1[0]:eventrange1[1]])
 		#h1.Draw("AL")
 		amphaseoffset=(clkoffset/self.fastclkrate)%(self.amperiod*4)
-		phaseoffset=2*PI*((clkoffset/self.fastclkrate)%self.period)/self.period
+		phaseoffset=2*numpy.pi*((clkoffset/self.fastclkrate)%self.period)/self.period
 		amphaseoff=self.amphase[i]+amphaseoffset
 		phaseoff=self.phase[i]+phaseoffset
 		wave1.FixParameter(0,amphaseoff)
@@ -249,7 +261,7 @@ class slrecon(rasterrecon):
 	    self.phaseall=pickle.load(open("aa.pkl","rb"))
 	    return
 	step=2000
-	self.eventpkl=os.path.join(self.rootpath,"pkl/bpmraw_event_%i.pkl"%self.run)
+	self.eventpkl=self.pklpath.getpath("raw","event",self.run)
 	self.event=pickle.load(open(self.eventpkl,"rb"))
 	splitentries,splitevents,amphases,phases=[],[],[],[]
 	for i in range(0,self.events,step):
@@ -258,12 +270,12 @@ class slrecon(rasterrecon):
 	    clkrange=[self.clkraw[i],self.clkraw[istep-1]]
 	    clkoffset=self.clkraw[i]
 	    clkrawoff=array("d",[a-clkoffset for a in self.clkraw[i:istep]])
-	    wave=TF1("wave",self.__slrasterfunc,clkrange[0],clkrange[1],7)
+	    wave=ROOT.TF1("wave",self.__slrasterfunc,clkrange[0],clkrange[1],7)
 	    amphase,phase=[0,0],[0,0]
 	    for j in range(0,2):
-		h1=TGraph(step,clkrawoff,self.rasterraw[self.rasterchan[j]][i:istep])
+		h1=ROOT.TGraph(step,clkrawoff,self.rasterraw[self.rasterchan[j]][i:istep])
 		wave.SetParLimits(0,-2*self.amperiod,2*self.amperiod)
-		wave.SetParLimits(1,-PI,PI)
+		wave.SetParLimits(1,-numpy.pi,numpy.pi)
 		wave.FixParameter(2,self.amperiod)
 		wave.FixParameter(3,self.period)
 		wave.FixParameter(4,self.size[j]["radius"])
@@ -277,11 +289,11 @@ class slrecon(rasterrecon):
 		phase[j]=wave.GetParameter(1)
 		#print i,amphase[j],phase[j],int(fitresult)
 		amphaseoffset=(clkoffset/self.fastclkrate)%(self.amperiod*4)
-		phaseoffset=2*PI*((clkoffset/self.fastclkrate)%self.period)/self.period
+		phaseoffset=2*numpy.pi*((clkoffset/self.fastclkrate)%self.period)/self.period
 		amphase[j]-=amphaseoffset
 		phase[j]-=phaseoffset
 		if amphase[j]<-2*self.amperiod:amphase[j]+=4*self.amperiod
-		if phase[j]<-PI:phase[j]+=2*PI
+		if phase[j]<-numpy.pi:phase[j]+=2*numpy.pi
 	    splitentries.append([i,istep])
 	    splitevents.append([self.event[i],self.event[istep]])
 	    amphases.append(amphase)
@@ -294,11 +306,11 @@ class slrecon(rasterrecon):
 	return self.__slrasterfunc([clkvalue],[self.amphase[xy],self.phase[xy],self.amperiod,self.period,self.size[xy]["radius"],self.size[xy]["center"],self.fitclockrate[xy]])
 
     def checkphase(self,xy,eventrange=[0,1000000000]):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	clkrange=[self.clkraw[eventrange[0]],self.clkraw[eventrange[1]-1]]
-	c1=TCanvas("c1","%s phase check"%self.rastertype,800,600)
-	g1=TGraph(eventrange[1]-eventrange[0],self.clkraw[eventrange[0]:eventrange[1]],self.rasterraw[xy+self.rasterchan[0]][eventrange[0]:eventrange[1]])
+	c1=ROOT.TCanvas("c1","%s phase check"%self.rastertype,800,600)
+	g1=ROOT.TGraph(eventrange[1]-eventrange[0],self.clkraw[eventrange[0]:eventrange[1]],self.rasterraw[xy+self.rasterchan[0]][eventrange[0]:eventrange[1]])
 	g1.Draw("AL")
 	for i in range(len(self.phaseall["splitentries"])):
 	    if eventrange[0] in range(self.phaseall["splitentries"][i][0],self.phaseall["splitentries"][i][1]):
@@ -309,7 +321,7 @@ class slrecon(rasterrecon):
 	if not amph[xy]:return
 	#amph=self.amphase
 	#ph=self.phase
-	wave=TF1("wave",self.__slrasterfunc,clkrange[0],clkrange[1],7)
+	wave=ROOT.TF1("wave",self.__slrasterfunc,clkrange[0],clkrange[1],7)
 	wave.SetParameters(amph[xy],ph[xy],self.amperiod,self.period,self.size[xy]["radius"],self.size[xy]["center"],float(self.fastclkrate))
 	wave.Draw("A*same")
 	#c1.Print("pic/%srasterphasecheck_%i_%i.png"%(self.rastertype,self.run,i),"png")
@@ -322,7 +334,7 @@ class fastrecon:
 	rasterrecon.__init__(self)
 	self.period=1/2870.
 	self.phase=[0,0]
-	self.shape=TF1("shape",self.__rectangle,0,9000,3) #rectangle
+	self.shape=ROOT.TF1("shape",self.__rectangle,0,9000,3) #rectangle
 	self.rastertype="fast"
 	self.rasterchan=[0,1]
 	
@@ -357,16 +369,16 @@ class fastrecon:
 	return par[3]/par[1]*tria+par[4]
     
     def getphase(self,eventrange=[0,1000000000]):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	clkrange=[self.clkraw[eventrange[0]],self.clkraw[eventrange[1]-1]]
 	clkoffset=self.clkraw[eventrange[0]]
 	clkrawoff=array("d",[a-clkoffset for a in self.clkraw[eventrange[0]:eventrange[1]]])
 	eventcut="Entry$>=%i&&Entry$<=%i"%tuple(eventrange)
-	wave=TF1("wave",self.__fastrasterfunc,clkrange[0],clkrange[1],6)
+	wave=ROOT.TF1("wave",self.__fastrasterfunc,clkrange[0],clkrange[1],6)
 	for i in range(0,1):
-	    c1=TCanvas("c1","%s raster phase"%self.rastertype,800,600)
-	    h1=TGraph(eventrange[1]-eventrange[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange[0]:eventrange[1]])
+	    c1=ROOT.TCanvas("c1","%s raster phase"%self.rastertype,800,600)
+	    h1=ROOT.TGraph(eventrange[1]-eventrange[0],clkrawoff,self.rasterraw[self.rasterchan[i]][eventrange[0]:eventrange[1]])
 	    wave.SetParLimits(0,-self.period/2.,self.period/2.)
 	    wave.SetParLimits(1,self.period*0.9,self.period*1.3)
 	    #wave.SetParLimits(2,0.8,3)
@@ -383,13 +395,13 @@ class fastrecon:
 	#c1.WaitPrimitive()
 	
     def checkphase(self,xy,eventrange=[0,1000000000]):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	clkrange=[self.clkraw[eventrange[0]],self.clkraw[eventrange[1]-1]]
-	c1=TCanvas("c1","%s phase check"%self.rastertype,800,600)
-	g1=TGraph(eventrange[1]-eventrange[0],self.clkraw[eventrange[0]:eventrange[1]],self.rasterraw[xy+self.rasterchan[0]][eventrange[0]:eventrange[1]])
+	c1=ROOT.TCanvas("c1","%s phase check"%self.rastertype,800,600)
+	g1=ROOT.TGraph(eventrange[1]-eventrange[0],self.clkraw[eventrange[0]:eventrange[1]],self.rasterraw[xy+self.rasterchan[0]][eventrange[0]:eventrange[1]])
 	g1.Draw("AL")
-	wave=TF1("wave",self.__fastrasterfunc,clkrange[0],clkrange[1],6)
+	wave=ROOT.TF1("wave",self.__fastrasterfunc,clkrange[0],clkrange[1],6)
 	wave.SetParameters(self.phase[xy],self.period,1,self.size[xy]["radius"],self.size[xy]["center"],self.fastclkrate)
 	wave.Draw("A*same")
 	c1.Print("pic/%sraster_%i_%i_%i.png"%(self.rastertype,self.run,eventrange[0],eventrange[1]),"png")
@@ -399,14 +411,16 @@ class fastrecon:
 class rastercalib:
     #general raster size,parameter: raster class, raster x,y magnet z pos,...
     def __rastersizecalib(self,raster,rasterz,rastertype,runpaths,eventsplits):
-	gROOT.SetBatch(True)
+	ROOT.gROOT.SetBatch(True)
 	#get run info
 	para=bpminsertparaprep(runpaths[0])
 	survey=para["survey"]
+	self.run=para["run"]
 	if not hasattr(self,'tgtz'):
 	    self.tgtz=para["tgtz"]
 	#get data
 	size,sizeinbpm,g1=[],[],[]
+	datanum=0
 	rasters=[]
 	for i in range(len(runpaths)):
 	    if i>=len(eventsplits):break
@@ -416,21 +430,27 @@ class rastercalib:
 		s=[int(a) for a in s]
 		size.append(rasters[-1].getsize(s))
 		sizeinbpm.append(rasters[-1].getsizeinbpm(s))
+		datanum+=1
 	rx,ry,bax,bay,bbx,bby=array('d'),array('d'),array('d'),array('d'),array('d'),array('d')
 	rxc,ryc,baxc,bayc,bbxc,bbyc=array('d'),array('d'),array('d'),array('d'),array('d'),array('d')
-	for i in range(len(eventsplits)):
-	    rx.append(size[i][0]["radius"])
-	    ry.append(size[i][1]["radius"])
+	for i in range(datanum):
+	    rxtmp,rytmp=size[i][0]["radius"],size[i][1]["radius"]
+	    baxtmp,baytmp=sizeinbpm[i][0][0]["radius"],sizeinbpm[i][0][1]["radius"]
+	    bbxtmp,bbytmp=sizeinbpm[i][1][0]["radius"],sizeinbpm[i][1][1]["radius"]
 	    rxc.append(size[i][0]["center"])
 	    ryc.append(size[i][1]["center"])
-	    bax.append(sizeinbpm[i][0][0]["radius"])
-	    bay.append(sizeinbpm[i][0][1]["radius"])
-	    bbx.append(sizeinbpm[i][1][0]["radius"])
-	    bby.append(sizeinbpm[i][1][1]["radius"])
-	    baxc.append(sizeinbpm[i][0][0]["center"])
-	    bayc.append(sizeinbpm[i][0][1]["center"])
-	    bbxc.append(sizeinbpm[i][1][0]["center"])
-	    bbyc.append(sizeinbpm[i][1][1]["center"])
+	    if any([abs(baxtmp)>50,abs(baytmp)>50,abs(bbxtmp)>50,abs(bbytmp)>50]):
+		continue
+	    rx.append(rxtmp)
+	    ry.append(rytmp)
+	    bax.append(baxtmp)
+	    bay.append(baytmp)
+	    bbx.append(bbxtmp)
+	    bby.append(bbytmp)
+	    #baxc.append(sizeinbpm[i][0][0]["center"])
+	    #bayc.append(sizeinbpm[i][0][1]["center"])
+	    #bbxc.append(sizeinbpm[i][1][0]["center"])
+	    #bbyc.append(sizeinbpm[i][1][1]["center"])
 	rastercenter=[sum(rxc)/len(rxc),sum(ryc)/len(ryc)]
 	# get raster size in target
 	#bpma=bpmpos(survey[0])
@@ -469,13 +489,13 @@ class rastercalib:
 	    #print rasteredge_axp[0]-rasteredge_axm[0],rasteredge_bxp[0]-rasteredge_bxm[0],tgtpos_xp[0][1][0]-tgtpos_xm[0][1][0]
 	    #print rasteredge_ayp[1]-rasteredge_aym[1],rasteredge_byp[1]-rasteredge_bym[1],tgtpos_yp[0][1][1]-tgtpos_ym[0][1][1]
 	#raster x y vs bpm x y
-	g1.append(TGraph(len(rx),rx,bax))
-	g1.append(TGraph(len(ry),ry,bay))
-	g1.append(TGraph(len(rx),rx,bbx))
-	g1.append(TGraph(len(ry),ry,bby))
-	c1=TCanvas("c1","%s raster size calibration"%rastertype,1280,800)
+	g1.append(ROOT.TGraph(len(rx),rx,bax))
+	g1.append(ROOT.TGraph(len(ry),ry,bay))
+	g1.append(ROOT.TGraph(len(rx),rx,bbx))
+	g1.append(ROOT.TGraph(len(ry),ry,bby))
+	c1=ROOT.TCanvas("c1","%s raster size calibration"%rastertype,1280,800)
 	c1.Divide(2,2)
-	pol1=TF1("pol1","pol1")
+	pol1=ROOT.TF1("pol1","pol1")
 	slope,ped,rbpmvstgt,sizeconst=[],[],[],[]
 	for i in range(4):
 	    c1.cd(i+1)
@@ -519,7 +539,7 @@ class rastercalib:
 	datfile.write("fastclock rate:103920\n")
 	datfile.write("#set to 1 if want to rebuild raster function instead of using ADC value directly, first is fast raster,second is slow raster\n")
 	datfile.write("function rebuild:0 0\n")
-	datfile.write("target z position(mm,don't change it):")
+	datfile.write("target z position(mm,dont change it):")
 	for z in self.tgtz: datfile.write("%f "%z)
 	datfile.write("\n")
 	if hasattr(self,"slowsizeconst"):
@@ -553,82 +573,6 @@ class rastercalib:
 	    datfile.write("fast raster x center:%f\n"%self.fastsizeconst[0][0][2])
 	    datfile.write("fast raster y center:%f\n"%self.fastsizeconst[1][0][2])
     
-def rasterconstread(run):
-    dbdir=os.getenv("BEAMDBPATH")
-    if dbdir==None:
-	print "please define BEAMDBPATH in your env"
-	return False
-    pydb=os.path.join(dbdir,"pyDB")
-    if not os.path.exists(pydb):os.makedirs(pydb)
-    datfiles=glob.glob(os.path.join(pydb,"raster_*.dat"))
-    calruns=[]
-    for datfile in datfiles:
-	calruns.append(int(re.split("[_.]",os.path.split(datfile)[1])[-2]))
-    calruns=sortrun(run,calruns)
-    def constread(filename,dbread=False):
-	datfile=open(filename,"r")
-	if not isinstance(dbread,dict):
-	    dbread={"period":False,"tgtz":False,"clkrate":False,"rebuild":False,"slxslope":False,"slxped":False,"slxcenter":False,\
-		"slyslope":False,"slyped":False,"slycenter":False,"fstxslope":False,"fstxped":False,"fstxcenter":False,\
-		"fstyslope":False,"fstyped":False,"fstycenter":False}
-	importfile=False
-	for line in datfile:
-	    reline=re.split("[:\n]",line)
-	    data=re.split(" ",reline[1].strip())
-	    #print data
-	    if "run period" in reline[0] and not dbread["period"]:
-		runperiods=re.split(",",reline[1].strip())
-		runperiod=[]
-		for p in runperiods:
-		    if p.isdigit():runperiod.append(int(p))
-		    else:
-			ptmp=[int(x) for x in re.split("[ ~-]",p)]
-			runperiod+=range(ptmp[0],ptmp[1]+1)
-		dbread["period"]=runperiod
-	    elif "fastclock rate" in reline[0] and not dbread["clkrate"]:
-		dbread["clkrate"]=float(data[0])
-	    elif "function rebuild" in reline[0] and not dbread["rebuild"]:
-		dbread["rebuild"]=[int(x)>0 for x in data]	
-	    elif "target z" in reline[0] and not dbread["tgtz"]:
-		dbread["tgtz"]=[float(x) for x in data]
-	    elif "slow raster x slope" in reline[0] and not dbread["slxslope"]:
-		dbread["slxslope"]=[float(x) for x in data]
-	    elif "slow raster x ped" in reline[0] and not dbread["slxped"]:
-		dbread["slxped"]=[float(x) for x in data]
-	    elif "slow raster x center" in reline[0] and not dbread["slxcenter"]:
-		dbread["slxcenter"]=float(data[0])
-	    elif "slow raster y slope" in reline[0] and not dbread["slyslope"]:
-		dbread["slyslope"]=[float(x) for x in data]
-	    elif "slow raster y ped" in reline[0] and not dbread["slyped"]:
-		dbread["slyped"]=[float(x) for x in data]
-	    elif "slow raster y center" in reline[0] and not dbread["slycenter"]:
-		dbread["slycenter"]=float(data[0])
-	    elif "fast raster x slope" in reline[0] and not dbread["fstxslope"]:
-		dbread["fstxslope"]=[float(x) for x in data]
-	    elif "fast raster x ped" in reline[0] and not dbread["fstxped"]:
-		dbread["fstxped"]=[float(x) for x in data]
-	    elif "fast raster x center" in reline[0] and not dbread["fstxcenter"]:
-		dbread["fstxcenter"]=float(data[0])
-	    elif "fast raster y slope" in reline[0] and not dbread["fstyslope"]:
-		dbread["fstyslope"]=[float(x) for x in data]
-	    elif "fast raster y ped" in reline[0] and not dbread["fstyped"]:
-		dbread["fstyped"]=[float(x) for x in data]
-	    elif "fast raster y center" in reline[0] and not dbread["fstycenter"]:
-		dbread["fstycenter"]=float(data[0])
-	    if "import" in reline[0]:
-		importfile=os.path.join(os.path.split(filename)[0],re.split(" ",reline[0].strip())[1])
-		break
-	if importfile:return constread(importfile,dbread)
-	else:return dbread
-    for calrun in calruns:
-	const=constread(os.path.join(pydb,"raster_%i.dat"%calrun))
-	if run in const["period"]:
-	    del const["period"]
-	    return const
-    print "sorry no raster calibration constant available for run %i,please contact pengjia"%run
-    return False
-	
-	
 if __name__ == '__main__':
     sl=slrecon()
     runpath=os.path.join(os.getenv("REPLAY_OUT_PATH"),"bpm_5555.root")

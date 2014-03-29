@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import re,urllib,os
+import re,urllib,os,numpy
 from odsread import odsread
 
 #keyword: sis3800,sis3801,happex,fast,slow,up,down
@@ -88,7 +88,7 @@ class bcmconst(odsread):
 #const is (slope,ped),unit is uA
 def getcurr(rate,const,device,clock="slow"):
     if not const:
-	return False
+	return numpy.nan
     if device=="happex":
 	return const[0]*(rate-const[1])*875/1041.65
     elif device=="sis3801":
@@ -101,7 +101,7 @@ def getcurr(rate,const,device,clock="slow"):
 #count is total count, clockcnt is total clock count(happex is total entry),unit is uA
 def getcharge(count,clockcnt,const,device,clock="fast"):
     if not const:
-	return False
+	return numpy.nan
     if device=="happex":
 	return const[0]*875e-6*(count-const[1]*clockcnt)
     else:
@@ -110,7 +110,7 @@ def getcharge(count,clockcnt,const,device,clock="fast"):
 #get raw value from current
 def curr2raw(curr,const,device,clock="fast"):
     if not const:
-	return False
+	return numpy.nan
     if device=="happex":
 	return curr*1041.65/875/const[0]+const[1]
     elif device=="sis3801":

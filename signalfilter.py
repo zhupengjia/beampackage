@@ -1,29 +1,41 @@
 #!/usr/bin/env python
-import re,os,glob,sys,gc,ctypes
+import re,os,glob,sys,gc,ctypes,time
 import numpy as np
 try:import cPickle as pickle
 except:import pickle
-from ROOT import TFile,TTree,TObject,gROOT,TSpectrum,TCanvas,gPad,TProfile
+try:import ROOT
+except:print "Error!! pyroot didn't compiled! please recompile your root!"
 from array import array
 #from pylab import plot,show,subplot
 from bcmconst import *
-from runinfo import pkgsetting
+from runinfo import getpklpath,runinfo
 try:from scipy.signal import butter,freqz,lfilter
 except Exception as err:
     print err
     print "sorry no scipy module found from your computer,it is needed to filter the bpm raw data infomation, please install it first"
 
 def lowfilter(raw,cutfreq):
-    n=4 # filter order
+    n=4 
     fs=960.015 #sample rate,here is helicity rate
     fc=2*cutfreq/fs #Normalize LPF cutoff frequency to Nyquist frequency
-    b,a=butter(n,fc)
+    if fc>=1:return raw
+    normok=False
+    while not normok:
+	b,a=butter(n,fc)
+	if len(b)==len(a):
+	    normok=True
+	    break
+	n-=1
+	if n<0:
+	    print "filter failed!you only have %i events for bpm, that's not enough for using filter!will use raw data instead!"%len(raw)
+	    return raw
     #w,h=freqz(b,a,n)
     sf=lfilter(b,a,raw)
     return np.float32(sf)
 
 def signalave(raw,avefreq):
     fs=960.015 #trigger rate,here is helicity rate
+    if 2*avefreq>=fs:return raw
     aveevents=int(fs/avefreq)
     Vave=Cavestack(aveevents)
     rawlen=len(raw)
@@ -47,8 +59,7 @@ class Cavestack:
 	    self._a=ctypes.CDLL(os.path.join(os.path.split(__file__)[0],"Cavestack.so"))
 	except Exception as e:
 	    print e
-	    print "attention!!!!!!!!!!please run \"make\" in beampackage folder!!!!!!!!!!"
-	    sys.exit()
+	    raise Exception("attention!!!!!!!!!!please run \"make\" in beampackage folder!!!!!!!!!!")
 	if ransize<=0:
 	    self._a_new=self._a.avestack_new(ctypes.c_int(size))
 	    self.avestack_del=self._a.avestack_del
@@ -93,293 +104,321 @@ class Cavestack:
 
 #get raw data from rootfile,save it to pkl file and return as dict type,bpm signal dealt with filter
 #filter1 used to get average pos,filter2 used to get raw pos that can see slow raster signal
-def decodefromrootfile(runpath,treename="T",firstevent=-1,lastevent=-1,forceredecode=0,buildtree=0):
-    rootfilepath,runfilename=os.path.split(runpath)
-    run=int(re.split("[_]",re.split("[.]",runfilename)[-2])[-1])
-    if run<100:run=int(re.split("[_]",re.split("[.]",os.path.split(runpath)[1])[-2])[-2])
-    arm="L" if run<20000 else "R"
-    #get pkl file
-    pkldir=os.path.join(rootfilepath,"pkl")
-    if not os.path.exists(pkldir):os.makedirs(pkldir)
-    pklpathn=[["rbpm","sbpm","ssbpm","fbpm","curr","hapevent","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event"]]
-    pklpath=[{},{}]
-    pklexists=[{},{}] #file exists?
-    pklredecode=[False,False]
-    for i in range(2):
-	for j in range(len(pklpathn[i])):
-	    n=pklpathn[i][j]
-	    pklpath[i][n]=os.path.join(pkldir,"bpmraw_%s_%i.pkl"%(n,run))
-	    if os.path.exists(pklpath[i][n]):pklexists[i][n]=True
-	    else:pklexists[i][n]=False
-	pklredecode[i]=forceredecode or not all(pklexists[i].values())
-    #check event
-    eventtolerate=1000
-    if not pklredecode[0]:
-	hapevent=pickle.load(open(pklpath[0]["hapevent"],"rb"))
-	if not((firstevent<0 or hapevent[0]-firstevent<eventtolerate) and (lastevent<0 or lastevent-hapevent[-1]<eventtolerate)):
-	    pklredecode[0]=True
-	del hapevent
-    if not pklredecode[1]:
-	event=pickle.load(open(pklpath[1]["event"],"rb"))
-	if not((firstevent<0 or event[0]-firstevent<eventtolerate) and (lastevent<0 or lastevent-event[-1]<eventtolerate)):
-	    pklredecode[1]=True
-	del event
-    redecode=any(pklredecode)
-    pkgpara=pkgsetting()
-    if run in pkgpara.hapunavail:fastbus=True
-    else:fastbus=False
-    if redecode:
-	#get redundant rootfiles
-	rootfiles=glob.glob(os.path.join(rootfilepath,runfilename.replace(".root","_*.root")))
-	rootfiles.append(runpath)
-	rootfiles.sort()
+class decode:
+    def __init__(self,runpath,treename="T",firstevent=-1,lastevent=-1,forceredecode=0,buildtree=0,forcefastbus=False):
+	self.info=runinfo()
+	self.bcmconst=bcmconst()
+	self.runpath=runpath
+	self.treename=treename
+	self.firstevent=firstevent
+	self.lastevent=lastevent
+	self.forceredecode=forceredecode
+	self.buildtree=buildtree
+	self.forcefastbus=forcefastbus
+	self.fastbus=forcefastbus
+	self.rootfilepath,self.runfilename=os.path.split(self.runpath)
+	self.run=int(re.split("[_]",re.split("[.]",self.runfilename)[-2])[-1])
+	if self.run<100:self.run=int(re.split("[_]",re.split("[.]",os.path.split(self.runpath)[1])[-2])[-2])
+	self.arm="L" if self.run<20000 else "R"
+	self.pp=getpklpath(self.rootfilepath)
+	self.pklprefix="raw"
+	self.pklpathn=[["rbpm","curr","hapevent","sbpm","ssbpm","fbpm","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event","fbbpm"]]
+	#decide if decode
+	self.manualset=False
+	self.pklon={}
+	self.setpklon(False)
+		
+    def setpklon(self,value):
+	for m in self.pklpathn:
+	    for n in m:
+		self.pklon[n]=value
+	
+    def getrootfilefamily(self):
+	self.rootfiles=glob.glob(os.path.join(self.rootfilepath,self.runfilename.replace(".root","_*.root"))) 
+	self.rootfiles.append(os.path.join(self.rootfilepath,self.runfilename))
+	self.rootfiles.sort()    
+    
+    #check if needed redecode
+    def checkifredecode(self):
+	if not self.info.ifhapavail(self.run) or self.forcefastbus:self.fastbus=True
+	else:self.fastbus=False
+	#check if decoded file is fastbus or not
+	fbbpmpkl=self.pp.getpath(self.pklprefix,"fbbpm",self.run)
+	fbbpmpkl2=self.pp.getpath(self.pklprefix,"fbbpm",self.run,1)
+	if self.forcefastbus:
+	    if not os.path.exists(fbbpmpkl):
+		self.forceredecode=1
+	elif not self.fastbus:
+	    if os.path.exists(fbbpmpkl):
+		if os.path.exists(fbbpmpkl2):
+		    self.forceredecode=1
+		    try:os.remove(fbbpmpkl2)
+		    except:raise Exception("sorry can not remove file %s, please check if you have permission in this directory"%fbbpmpkl2)
+		elif not os.path.exists(self.pp.getpath(self.pklprefix,"rbpm",self.run,1)):
+		    self.forceredecode=1
+	#check event
+	eventtolerate=100
+	if not self.fastbus:
+	    self.pklon["fbbpm"]=False
+	if not self.forceredecode:
+	    hapeventpkl=self.pp.getpath(self.pklprefix,"hapevent",self.run)
+	    if os.path.exists(hapeventpkl):
+		hapevent=pickle.load(open(hapeventpkl,"rb"))
+		if (self.firstevent<0 or abs(hapevent[0]-self.firstevent)<eventtolerate) and (self.lastevent<0 or abs(self.lastevent-hapevent[-1])<eventtolerate):
+		    for key in self.pklpathn[0]:
+			if os.path.exists(self.pp.getpath(self.pklprefix,key,self.run)):
+			    self.pklon[key]=False
+		del hapevent
+	    eventpkl=self.pp.getpath(self.pklprefix,"event",self.run)
+	    if os.path.exists(eventpkl):
+		event=pickle.load(open(eventpkl,"rb"))
+		if (self.firstevent<0 or abs(event[0]-self.firstevent)<eventtolerate) and (self.lastevent<0 or abs(self.lastevent-event[-1])<eventtolerate):
+		    for key in self.pklpathn[1]:
+			if os.path.exists(self.pp.getpath(self.pklprefix,key,self.run)):
+			    self.pklon[key]=False    
+    
+    #decode from rootfile,leaves should be in self.pklpathn
+    def decodefromrootfile(self):
+	if not any(self.pklon.values()):return True
+	ROOT.gROOT.SetBatch(True)
 	#raw leaves
 	eventleaf="fEvtHdr.fEvtNum" #event number
-	if pklredecode[0]:
-	    thappexprefix="happex.%s."%arm
-	    numringleaf="%snumring"%thappexprefix
-	    bpmrawleaf,hapbcmrawleaf,scalerbcmrawleaf=[],[0,0],[0,0]
-	    for i in range(8): #for bpm
-		whichbpm="A" if i<4 else "B"
-		if fastbus:bpmrawleaf.append("%surb.BPM%s.rawcur.%i"%(arm,whichbpm,i%4+1))
-		else:bpmrawleaf.append("%sBPM%s.rawcur.%i"%(thappexprefix,whichbpm,i%4+1))
-	    hapbcmrawleaf[0]="%sbcm_up"%thappexprefix #for bcm
-	    hapbcmrawleaf[1]="%sbcm_down"%thappexprefix
-	    scalerbcmrawleaf[0]="evleft_bcm_upr" if run<20000 else "evright_bcm_upr"
-	    scalerbcmrawleaf[1]="evleft_bcm_downr" if run<20000 else "evright_bcm_downr"
-	    #bcm const
-	    const=bcmconst()
-	    hapbcmconst=[const.getconst(run,"happex",a) for a in ["up","down"]]
-	    hapbcmavail=[True if a else False for a in hapbcmconst]
-	    hapbcmavailall=hapbcmavail[0] or hapbcmavail[1]
-	    scalerbcmconst=[const.getconst(run,"sis3800",a,"slow") for a in ["up","down"]]
-	    scalerbcmavail=[True if a else False for a in scalerbcmconst]
-	if pklredecode[1]:
-	    rasterrawleaf=["%srb.Raster.rawcur.x"%arm,"%srb.Raster.rawcur.y"%arm] #for raster
-	    rasterrawleaf+=["%srb.Raster.rawcurSL.x"%arm,"%srb.Raster.rawcurSL.y"%arm]
-	    clkrawleaf=arm+"clk.fastclk" #for clock
-	#get raw data
-	try:
-	    if pklredecode[0]:
-		bpmraw=[array("i",[]),array("i",[]),array("i",[]),array("i",[]),\
-		    array("i",[]),array("i",[]),array("i",[]),array("i",[])]
-		hapevent=array("I",[])
-		curr=array("f",[])
-	    if pklredecode[1]:
-		rasterraw=[array("i",[]),array("i",[]),array("i",[]),array("i",[])]
-		event=array("I",[])
-		clkraw=array("I",[])
-		rasteravail=True
-		clkavail=True
-	    for runpath in rootfiles:
-		print "decoding raw data from rootfile %s..."%runpath
-		rootfile=TFile(runpath,"READ")
-		if rootfile.IsZombie():
-		    print "Error! no file %s exists!"%runpath
-		    if runpath==rootfiles[0]:sys.exit()
-		    else:continue
-		tree=rootfile.Get(treename)
-		events=tree.GetEntries()
-		#get leaf and branch
-		try:leventleaf=tree.GetLeaf(eventleaf)
+	thappexprefix="happex.%s."%self.arm
+	numringleaf="%snumring"%thappexprefix
+	bpmrawleaf,fbbpmrawleaf,hapbcmrawleaf,scalerbcmrawleaf=[],[],[0,0],[0,0]
+	for i in range(8): #for bpm
+	    whichbpm="A" if i<4 else "B"
+	    if self.fastbus:
+		bpmrawleaf.append("%surb.BPM%s.rawcur.%i"%(self.arm,whichbpm,i%4+1))
+	    else:bpmrawleaf.append("%sBPM%s.rawcur.%i"%(thappexprefix,whichbpm,i%4+1))
+	hapbcmrawleaf[0]="%sbcm_up"%thappexprefix #for bcm
+	hapbcmrawleaf[1]="%sbcm_down"%thappexprefix
+	scalerbcmrawleaf[0]="evleft_bcm_upr" if self.run<20000 else "evright_bcm_upr"
+	scalerbcmrawleaf[1]="evleft_bcm_downr" if self.run<20000 else "evright_bcm_downr"
+	#bcm const
+	hapbcmconst=[self.bcmconst.getconst(self.run,"happex",a) for a in ["up","down"]]
+	hapbcmavail=[True if a else False for a in hapbcmconst]
+	hapbcmavailall=any(hapbcmavail)
+	scalerbcmconst=[self.bcmconst.getconst(self.run,"sis3800",a,"slow") for a in ["up","down"]]
+	scalerbcmavail=[True if a else False for a in scalerbcmconst]
+	#raster
+	rasterrawleaf=["%srb.Raster.rawcur.x"%self.arm,"%srb.Raster.rawcur.y"%self.arm] #for raster
+	rasterrawleaf+=["%srb.Raster.rawcurSL.x"%self.arm,"%srb.Raster.rawcurSL.y"%self.arm]
+	clkrawleaf=self.arm+"clk.fastclk" #for clock
+	#get total events
+	print "getting total events in rootfiles"
+	rootfiles,trees,events,hapevents={},{},{},{}
+	ff=-1
+	for runpath in self.rootfiles:
+	    rootfiles[runpath]=ROOT.TFile(runpath,"READ")
+	    if rootfiles[runpath].IsZombie():
+		print "Error! no file %s exists!"%runpath
+		if runpath==self.rootfiles[0]:return False
+		else:
+		    rootfiles[runpath].Close()
+		    rootfiles[runpath]=False
+		    continue
+	    trees[runpath]=rootfiles[runpath].Get(self.treename)
+	    events[runpath]=trees[runpath].GetEntries()
+	    #get happex total entries
+	    ff+=1
+	    if any([self.pklon[v] for v in ["rbpm","curr","hapevent"]]):
+		try:
+		    trees[runpath].Draw(hapbcmrawleaf[0]+">>h%i"%ff)
+		    h1=ROOT.gPad.GetPrimitive("h%i"%ff)
+		    hapevents[runpath]=int(h1.GetEntries())
+		    del h1
 		except:
-		    print "Error!! no leaf %s in your rootfile!!"%eventleaf
-		    return False
-		if pklredecode[0]:
-		    try:lnumringleaf=tree.GetLeaf(numringleaf)
-		    except:
-			print "Error!! no leaf %s in your rootfile!!"%numringleaf
-			return False
+		    raise Exception("Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0])
+	totevents=sum(events.values())
+	tothapevents=sum(hapevents.values())
+	#init raw array
+	bpmraw,fbbpmraw,rasterraw=[],[],[]
+	for i in range(8):
+	    bpmraw.append(np.zeros(tothapevents,np.int32))
+	    fbbpmraw.append(np.zeros(totevents,np.int32))
+	for i in range(4):
+	    rasterraw.append(np.zeros(totevents,np.int32))
+	hapevent=np.zeros(tothapevents,np.uint32)
+	curr=np.zeros(tothapevents,np.float32)
+	event=np.zeros(totevents,np.uint32)
+	clkraw=np.zeros(totevents,np.int32)
+	ehap,enorm=0,0
+	#decode
+	for runpath in self.rootfiles:
+	    print "decoding raw data from rootfile %s..."%runpath
+	    try:leventleaf=trees[runpath].GetLeaf(eventleaf)
+	    except:
+		raise Exception("Error!! no leaf %s in your rootfile!!"%eventleaf)
+	    if self.pklon["rbpm"]:
+		try:
+		    if self.fastbus:
+			lbpmrawleaf=[trees[runpath].GetLeaf(l) for l in bpmrawleaf]
+		    else:    
+			bpmrawbranch=[trees[runpath].GetBranch(l) for l in bpmrawleaf]
+			lbpmrawleaf=[b.GetLeaf("data") for b in bpmrawbranch]
+		except:
+		    raise Exception("Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0])
+	    if self.pklon["curr"]:
+		if hapbcmavailall:
 		    try:
-			if fastbus:
-			    lbpmrawleaf=[tree.GetLeaf(l) for l in bpmrawleaf]
-			else:    
-			    bpmrawbranch=[tree.GetBranch(l) for l in bpmrawleaf]
-			    lbpmrawleaf=[b.GetLeaf("data") for b in bpmrawbranch]
-		    except:
-			print "Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0]
-			return False
-		    try:
-			hapbcmrawbranch=[tree.GetBranch(l) for l in hapbcmrawleaf]
+			hapbcmrawbranch=[trees[runpath].GetBranch(l) for l in hapbcmrawleaf]
 			lhapbcmrawleaf=[b.GetLeaf("data") for b in hapbcmrawbranch]
 		    except:
 			print "Error!! no leaf %s in your rootfile!!"%hapbcmrawleaf[0]
 			print "will try to use scaler bcm info instead since you didn't replay happex bcm info"
 			hapbcmavailall=False
+		if not hapbcmavailall:
+		    try:lscalerbcmrawleaf=[trees[runpath].GetLeaf(scalerbcmrawleaf[i]) for i in range(2)]
+		    except:
+			raise Exception("Error!! no leaf %s in your rootfile!!"%scalerbcmrawleaf[0])
+	    hapavail=any([self.pklon[v] for v in ["rbpm","curr","hapevent"]])
+	    if hapavail:
+		try:lnumringleaf=trees[runpath].GetLeaf(numringleaf)
+		except:
+		    raise Exception("Error!! no leaf %s in your rootfile!!"%numringleaf)
+	    if self.pklon["clock"]:
+		try:lclkrawleaf=trees[runpath].GetLeaf(clkrawleaf)
+		except:
+		    print "Error!! no leaf %s in your rootfile!will leave it as empty!"%clkrawleaf
+		    self.pklon["clock"]=False
+	    if self.pklon["raster"]:
+		try:lrasterrawleaf=[trees[runpath].GetLeaf(rasterrawleaf[i]) for i in range(4)]
+		except:
+		    print "Error!! no leaf %s in your rootfile!will leave it as empty!"%rasterrawleaf[0]
+		    self.pklon["raster"]=False
+	    if not any(self.pklon.values()):return True
+	    bcmraw=np.zeros(2,dtype=np.int32)
+	    #decode from rootfile
+	    for e in xrange(events[runpath]):
+		if e%1000==0:
+		    print "decoding %i events, %i left"%(e,events[runpath]-e)
+		trees[runpath].GetEntry(e)
+		ee=leventleaf.GetValue()
+		if self.pklon["event"]:
+		    event[enorm]=ee
+		if self.pklon["clock"]:
+		    clkraw[enorm]=lclkrawleaf.GetValue()
+		if self.pklon["raster"]:
+		    for i in range(4):
+			rasterraw[i][enorm]=lrasterrawleaf[i].GetValue()
+		if self.pklon["fbbpm"]:
+		    for i in range(8):
+			fbbpmraw[i][enorm]=lbpmrawleaf[i].GetValue()
+		if self.pklon["curr"]:
+		    bcmraw=[False,False]
 		    if not hapbcmavailall:
-			try:lscalerbcmrawleaf=[tree.GetLeaf(scalerbcmrawleaf[i]) for i in range(2)]
-			except:
-			    print "Error!! no leaf %s in your rootfile!!"%scalerbcmrawleaf[0]
-			    return False
-		if pklredecode[1]:	
-		    try:lclkrawleaf=tree.GetLeaf(clkrawleaf)
-		    except:
-			print "Error!! no leaf %s in your rootfile!will leave it as empty!"%clkrawleaf
-			clkavail=False
-		    try:lrasterrawleaf=[tree.GetLeaf(rasterrawleaf[i]) for i in range(4)]
-		    except:
-			print "Error!! no leaf %s in your rootfile!will leave it as empty!"%rasterrawleaf[0]
-			rasteravail=False
-		    
-		#decode from rootfile
-		for e in range(events):
-		    if e%1000==0:
-			print "decoding %i events, %i left"%(e,events-e)
-		    tree.GetEntry(e)
-		    try:ee=int(leventleaf.GetValue())
-		    except Exception as err:
-			print err
-			print "Error!! no leaf %s in your rootfile!!"%eventleaf
-			return False
-		    if pklredecode[1]:
-			event.append(ee)
-			if clkavail:
-			    try:clkraw.append(int(lclkrawleaf.GetValue()))
-			    except:
-				clkavail=False
-				print "Error!! no leaf %s in your rootfile!will leave it as empty!"%clkrawleaf
-				if not pklredecode[0] and pklexists[1]["raster"] and pklexists[1]["event"]:
-				    pklredecode[1]=False
-				    break
-			if rasteravail:
-			    try:
-				for i in range(4):
-				    rasterraw[i].append(int(lrasterrawleaf[i].GetValue()))
-			    except:
-				rasteravail=False
-				print "Error!! no leaf %s in your rootfile!will leave it as empty!"%rasterrawleaf[0]
-				if not pklredecode[0] and pklexists[1]["clock"] and pklexists[1]["event"]:
-				    pklredecode[1]=False
-				    break
-		    if pklredecode[0]:
-			bcmraw=[False,False]
-			if not hapbcmavailall:
-			    for i in range(2):
-				if scalerbcmavail[i]:
-				    try:
-					bcmraw[i]=lscalerbcmrawleaf[i].GetValue()
-				    except Exception as err:
-					print err
-					print "Error!! no leaf %s in your rootfile!!"%scalerbcmrawleaf[i]
-					return False
-				    bcmraw[i]=getcurr(bcmraw[i],scalerbcmconst[i],"sis3800","slow")
-			    bcmraw=[a for a in bcmraw if a]
-			if fastbus:
-			    bpmrawfastbus=[int(lbpmrawleaf[i].GetValue()) for i in range(8)]
-			#for happex data
-			numring=int(lnumringleaf.GetValue())
-			if numring<1:continue
-			for i in range(numring):
-			    if fastbus:
+			for i in range(2):
+			    if scalerbcmavail[i]:
+				bcmraw[i]=lscalerbcmrawleaf[i].GetValue()
+				bcmraw[i]=getcurr(bcmraw[i],scalerbcmconst[i],"sis3800","slow")
+		if hapavail:
+		    numring=int(lnumringleaf.GetValue())
+		    if numring<1:continue
+		    for i in range(numring):
+			if self.pklon["rbpm"]:
+			    if self.fastbus:
 				for j in range(8):
-				    bpmraw[j].append(bpmrawfastbus[j])
+				    bpmraw[j][ehap]=fbbpmraw[j][-1]
 			    else:
 				for j in range(8):
-				    bpmraw[j].append(int(lbpmrawleaf[j].GetValue(i)))
-			    if hapbcmavailall:
-				for j in range(2):
-				    if hapbcmavail[j]:
-					bcmraw[j]=lhapbcmrawleaf[j].GetValue(i)
-					bcmraw[j]=getcurr(bcmraw[j],hapbcmconst[j],"happex")
-				bcmraw=[a for a in bcmraw if a]
-			    curr.append(sum(bcmraw)/len(bcmraw))
-			    hapevent.append(ee)
-		try:
-		    del tree,rootfile,leventleaf,
-		    if pklredecode[0]:
-			del lbpmrawleaf,hapbcmrawbranch,lhapbcmrawleaf,lnumringleaf
-			if not fastbus:bpmrawbranch
-		    if pklredecode[1]:
-			del lclkrawleaf,lrasterrawleaf
-		except:continue
-	except Exception as err:
-	    print "Error!! something wrong with your rootfiles!! Please check the error message below and check your rootfile!!"
-	    print err
-	    return False
-	if pklredecode[0]:
-	    for i in range(8):
-		bpmraw[i]=np.asarray(bpmraw[i],dtype=np.int32)
-	    try:pickle.dump(bpmraw,open(pklpath[0]["rbpm"],"wb",-1),-1)
-	    except:sys.exit("\n\n\n\nError!failed to dump for raw bpm data,do you have write permission in dir %s?"%pkldir)
-	    #deal signal
-	    fbpmraw_sslow,fbpmraw_slow,fbpmraw_fast=[0]*8,[0]*8,[0]*8
+				    bpmraw[j][ehap]=lbpmrawleaf[j].GetValue(i)
+			if self.pklon["curr"]:
+			    for j in range(2):
+				if hapbcmavail[j]:
+				    bcmraw[j]=lhapbcmrawleaf[j].GetValue(i)
+				    bcmraw[j]=getcurr(bcmraw[j],hapbcmconst[j],"happex")
+			curr[ehap]=np.nanmean(bcmraw)
+			if self.pklon["hapevent"]:
+			    hapevent[ehap]=ee
+			ehap+=1
+		enorm+=1
+	    rootfiles[runpath].Close()
+	try:
+	    if self.pklon["curr"] and len(curr)>100:
+		pickle.dump(curr,open(self.pp.getpath(self.pklprefix,"curr",self.run,1),"wb",-1),-1)
+	    if self.pklon["rbpm"] and len(bpmraw[0])>100:
+		pickle.dump(bpmraw,open(self.pp.getpath(self.pklprefix,"rbpm",self.run,1),"wb",-1),-1)
+	    if self.pklon["fbbpm"] and len(fbbpmraw[0])>100:
+		pickle.dump(fbbpmraw,open(self.pp.getpath(self.pklprefix,"fbbpm",self.run,1),"wb",-1),-1)
+	    if self.pklon["hapevent"] and len(hapevent)>100:
+		pickle.dump(hapevent,open(self.pp.getpath(self.pklprefix,"hapevent",self.run,1),"wb",-1),-1)
+	    if self.pklon["event"] and len(event)>100:
+		pickle.dump(event,open(self.pp.getpath(self.pklprefix,"event",self.run,1),"wb",-1),-1)
+	    if self.pklon["clock"] and len(clkraw)>100:
+		pickle.dump(clkraw,open(self.pp.getpath(self.pklprefix,"clock",self.run,1),"wb",-1),-1)
+	    if self.pklon["raster"] and len(rasterraw[0])>100:
+		pickle.dump(rasterraw,open(self.pp.getpath(self.pklprefix,"raster",self.run,1),"wb",-1),-1)
+	except:
+	    raise Exception("\n\n\n\nError!failed to dump for bpm data,do you have write permission in dir %s?"%self.rootfilepath)
+	del curr,bpmraw,fbbpmraw,rasterraw,clkraw,hapevent,event
+	gc.collect()
+	
+    def bpmdatafilt(self):
+	if any(self.pklon[x] for x in ["sbpm","ssbpm","fbpm"]):
+	    bpmraw=pickle.load(open(self.pp.getpath(self.pklprefix,"rbpm",self.run),"rb"))
+	    filteredbpmraw=[[0]*8,[0]*8,[0]*8]
+	    filtertype=[self.info.filter1type,self.info.filter2type,self.info.filter3type]
+	    filterfreq=[self.info.filter1,self.info.filter2,self.info.filter3]
+	    filtername=["sbpm","fbpm","ssbpm"]
+	    if len(bpmraw[0])<100:return True
 	    for i in range(7,-1,-1):
-		print "filtering for bpm channel %i"%(i+1)
-		if pkgpara.filter1<500:
-		    if "ave" in pkgpara.filter1type or fastbus:
-			fbpmraw_slow[i]=signalave(bpmraw[-1],pkgpara.filter1)
-		    else:
-			fbpmraw_slow[i]=lowfilter(bpmraw[-1],pkgpara.filter1)
-		else:
-		    fbpmraw_slow[i]=bpmraw[-1]
-		if pkgpara.filter2<500:
-		    if "ave" in pkgpara.filter2type or fastbus:
-			fbpmraw_fast[i]=signalave(bpmraw[-1],pkgpara.filter2)
-		    else:
-			fbpmraw_fast[i]=lowfilter(bpmraw[-1],pkgpara.filter2)
-		else:
-		    fbpmraw_fast[i]=bpmraw[-1]
-		if pkgpara.filter3<500:
-		    if "ave" in pkgpara.filter3type or fastbus:
-			fbpmraw_sslow[i]=signalave(bpmraw[-1],pkgpara.filter3)
-		    else:
-			fbpmraw_sslow[i]=lowfilter(bpmraw[-1],pkgpara.filter3)
-		else:
-		    fbpmraw_sslow[i]=bpmraw[-1]
+		print "filtering for bpm channel %i"%i
+		for j in range(3):
+		    if self.pklon[filtername[j]]:
+			if "ave" in filtertype[j] or self.fastbus:
+			    filteredbpmraw[j][i]=signalave(bpmraw[-1],filterfreq[j])
+			else:
+			    filteredbpmraw[j][i]=lowfilter(bpmraw[-1],filterfreq[j])
 		del bpmraw[-1]
-		#gc.collect() #recycle memory
+		gc.collect() #recycle memory
+	    try:
+		for j in range(3):
+		    if self.pklon[filtername[j]]:
+			pickle.dump(filteredbpmraw[j],open(self.pp.getpath(self.pklprefix,filtername[j],self.run,1),"wb",-1),-1)
+	    except:
+		raise Exception("\n\n\n\nError!failed to dump for bpm data,do you have write permission in dir %s?"%self.rootfilepath)
+	    del filteredbpmraw
+	    gc.collect()
+	availname=["bpmavail","fbpmavail","sbpmavail"]
+	if any(self.pklon[x] for x in availname):
 	    #build bpm avail variable
 	    curravail=0.02
-	    scurrshift=int(1000/pkgpara.filter1+0.9)
-	    fcurrshift=int(1000/pkgpara.filter2+0.9)
-	    sscurrshift=int(1000/pkgpara.filter3+0.9)
 	    #at least cut 2000 events(2s)
 	    minshift=2000
-	    scurrshift=minshift if scurrshift<minshift else scurrshift
-	    fcurrshift=minshift if fcurrshift<minshift else fcurrshift
-	    sscurrshift=minshift if sscurrshift<minshift else sscurrshift
-	    curr1=[1 if c>curravail else 0 for c in curr]
-	    scurr2=[0]*scurrshift+curr1[:-scurrshift]
-	    fcurr2=[0]*fcurrshift+curr1[:-fcurrshift]
-	    sscurr2=[0]*sscurrshift+curr1[:-sscurrshift]
-	    sbpmavail,fbpmavail,ssbpmavail=array("i",[]),array("i",[]),array("i",[])
-	    for i in range(len(curr1)):
-		sbpmavail.append(curr1[i]*scurr2[i])
-		fbpmavail.append(curr1[i]*fcurr2[i])
-		ssbpmavail.append(curr1[i]*sscurr2[i])
-	    #dump
-	    try:
-		pickle.dump(fbpmraw_slow,open(pklpath[0]["sbpm"],"wb",-1),-1)
-		pickle.dump(fbpmraw_sslow,open(pklpath[0]["ssbpm"],"wb",-1),-1)
-		pickle.dump(fbpmraw_fast,open(pklpath[0]["fbpm"],"wb",-1),-1)
-		pickle.dump(np.asarray(curr,dtype=np.float32),open(pklpath[0]["curr"],"wb",-1),-1)
-		pickle.dump(np.asarray(sbpmavail,dtype=np.bool),open(pklpath[0]["bpmavail"],"wb",-1),-1)
-		pickle.dump(np.asarray(fbpmavail,dtype=np.bool),open(pklpath[0]["fbpmavail"],"wb",-1),-1)
-		pickle.dump(np.asarray(ssbpmavail,dtype=np.bool),open(pklpath[0]["sbpmavail"],"wb",-1),-1)
-		pickle.dump(np.asarray(hapevent,dtype=np.uint32),open(pklpath[0]["hapevent"],"wb",-1),-1)
-	    except:sys.exit("\n\n\n\nError!failed to dump for filtered bpm data,do you have write permission in dir %s?"%pkldir)
-	    del fbpmraw_slow,fbpmraw_sslow,fbpmraw_fast,curr,hapevent,sbpmavail,fbpmavail,ssbpmavail
-	if pklredecode[1]:
-	    if clkavail:
-		try:pickle.dump(np.asarray(clkraw,dtype=np.uint32),open(pklpath[1]["clock"],"wb",-1),-1)
-		except:sys.exit("\n\n\n\nError!failed to dump for clock data,do you have write permission in dir %s?"%pkldir)
-	    if rasteravail:
-		for i in range(4):
-		    rasterraw[i]=np.asarray(rasterraw[i],dtype=np.int32)
-		try:pickle.dump(rasterraw,open(pklpath[1]["raster"],"wb",-1),-1)
-		except:sys.exit("\n\n\n\nError!failed to dump for rasterdata,do you have write permission in dir %s?"%pkldir)
-	    try:pickle.dump(np.asarray(event,dtype=np.uint32),open(pklpath[1]["event"],"wb",-1),-1)
-	    except:sys.exit("\n\n\n\nError!failed to dump for event data,do you have write permission in dir %s?"%pkldir)
-	    del rasterraw,clkraw,event
-	gc.collect() #recycle memory
-    if buildtree:fillbpmrawtree(run,rootfilepath)
-    return True
-
+	    filterfreq=[self.info.filter1,self.info.filter2,self.info.filter3]
+	    currpkl=self.pp.getpath(self.pklprefix,"curr",self.run)
+	    if os.path.exists(currpkl):
+		curr=pickle.load(open(currpkl,"rb"))
+		curr=curr>curravail
+		for i in range(3):
+		    if self.pklon[availname[i]]:
+			currshift=int(1000/filterfreq[i]+0.9)
+			currshift=minshift if currshift<minshift else currshift
+			curr1=numpy.concatenate((numpy.zeros(currshift),curr[:-currshift]))
+			bpmavail=curr*curr1
+			try:
+			    pickle.dump(bpmavail,open(self.pp.getpath(self.pklprefix,availname[i],self.run,1),"wb",-1),-1)
+			except:
+			    raise Exception("\n\n\n\nError!failed to dump for bpm data,do you have write permission in dir %s?"%self.rootfilepath)
+	    del curr,curr1,bpmavail
+	    gc.collect()
+		
+    def autodecode(self):
+	self.setpklon(True)
+	for x in ["self.getrootfilefamily()","self.checkifredecode()","self.decodefromrootfile()","self.bpmdatafilt()"]:
+	    t1=time.time()
+	    exec(x)
+	    t2=time.time()
+	    print "use time for %s: "%x,t2-t1
+	if self.buildtree:fillbpmrawtree(self.run,self.rootfilepath)
+	return True
+ 
 def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
     print "filling bpm raw trees for run %i"%run   
     ##pkl file list
-    pkldir=os.path.join(rootpath,"pkl")
-    pklfilen=[["rbpm","sbpm","ssbpm","fbpm","curr","hapevent","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event"]]
+    pp=getpklpath(rootpath)
+    pklfilen=[["rbpm","sbpm","ssbpm","fbpm","curr","hapevent","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event","fbbpm"]]
     datatypes=["bpm","raster"]
     for p in range(len(pklfilen)):
 	for f in range(len(pklfilen[p])):pklfilen[p][f]="raw_"+pklfilen[p][f]
@@ -387,9 +426,12 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 	pklfilen[0].append("pos_sbpm%shall"%(a))
 	pklfilen[0].append("pos_ssbpm%sbpm"%(a))
 	for b in ["bpm","rot"]:
+	    pklfilen[1].append("pos_fbbpm%s%s"%(a,b))
 	    for c in ["s","f"]:
 		pklfilen[0].append("pos_%sbpm%s%s"%(c,a,b))
-    tgtpklfiles=glob.glob(os.path.join(pkldir,"bpmpos_tgt*_%i.pkl"%run))
+    tgtpklfiles=glob.glob(os.path.join(pp.pkldir,"bpmpos_tgt*_%i.pkl"%run))
+    if len(tgtpklfiles)<1:
+	tgtpklfiles=glob.glob(os.path.join(pp.pklbak,"bpmpos_tgt*_%i.pkl"%run))
     for p in tgtpklfiles:
 	if os.path.getsize(p)>1000:
 	    fn=os.path.split(p)[1]
@@ -406,7 +448,7 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 	insertgroup.append([[]])
 	totalsize=0
 	for f in range(len(pklfilen[p])):
-	    fn=os.path.join(rootpath,"pkl/bpm%s_%i.pkl"%(pklfilen[p][f],run))
+	    fn=pp.getpath("",pklfilen[p][f],run)
 	    if not os.path.exists(fn):continue
 	    totalsize+=os.path.getsize(fn)
 	    if totalsize>=maxram:
@@ -421,29 +463,33 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 	    Nfile=len(insertgroup[p][f]) 
 	    if Nfile<1:continue
 	    if firstopen:
-		bpmrootfile=TFile(os.path.join(rootpath,"%s_%i.root"%(fileprefix,run)),"RECREATE")
+		bpmrootfile=ROOT.TFile(os.path.join(rootpath,"%s_%i.root"%(fileprefix,run)),"RECREATE")
 	    else:
-		bpmrootfile=TFile(os.path.join(rootpath,"%s_%i.root"%(fileprefix,run)),"UPDATE")
+		bpmrootfile=ROOT.TFile(os.path.join(rootpath,"%s_%i.root"%(fileprefix,run)),"UPDATE")
 	    print "filling %i-%i group data for run %i"%(p,f,run)
 	    #create tree
 	    if firstbranch[p]:
-		tree=TTree(datatypes[p],datatypes[p])
+		tree=ROOT.TTree(datatypes[p],datatypes[p])
 	    else:
 		tree=bpmrootfile.Get(datatypes[p])
 	    #create branches
 	    data,branch,Vdata=[0]*Nfile,[0]*Nfile,[0]*Nfile
 	    numentry,numvar=[],[]
 	    for pf in range(Nfile):
-		fn=os.path.join(rootpath,"pkl/bpm%s_%i.pkl"%(insertgroup[p][f][pf],run))
+		fn=pp.getpath("",insertgroup[p][f][pf],run)
 		data[pf]=pickle.load(open(fn,"rb"))
 		dataleaves=insertgroup[p][f][pf]
 		if "-" in dataleaves:dataleaves=dataleaves.replace("-","m")
 		branchname=dataleaves
 		numdata=len(data[pf])
-		if numdata>10:nvalues=1 #check if have more than 1 variables in a pkl file
+		if numdata<1:continue
+		elif numdata>10:nvalues=1 #check if have more than 1 variables in a pkl file
 		else:
 		    nvalues=numdata
-		    numdata=len(data[pf][0])
+		    try:numdata=len(data[pf][0])
+		    except Exception as err:
+			print pf,numdata,insertgroup[p][f]
+			raise Exception(err)
 		numentry.append(numdata)
 		numvar.append(nvalues)
 		if nvalues<1:continue
@@ -474,7 +520,7 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 		if firstbranch[p]:tree.Fill()
 		else:
 		    for pf in range(Nfile):branch[pf].Fill()
-	    tree.Write("",TObject.kOverwrite)
+	    tree.Write("",ROOT.TObject.kOverwrite)
 	    bpmrootfile.Close()
 	    if firstbranch[p]:firstbranch[p]=False
 	    if firstopen:firstopen=False
@@ -486,9 +532,10 @@ def getposrms(rms,rmspic="rms.png"):
     #plot(rms)
     #show()
     mineventsplit=1000
-    gROOT.SetBatch(True)
+    ROOT.gROOT.SetBatch(True)
     #fill rms tree
-    rmstree=TTree("bpmrms","bpmrms")
+    #rmsrootfile=ROOT.TFile("rms.root","RECREATE")
+    rmstree=ROOT.TTree("bpmrms","bpmrms")
     leaves=["rms"]
     Vleaves="rms/F"
     Vrms=array("f",[0.0])
@@ -497,19 +544,24 @@ def getposrms(rms,rmspic="rms.png"):
     for i in range(entries):
 	Vrms[0]=rms[i]
 	rmstree.Fill()
+    #rmstree.Write("",ROOT.TObject.kOverwrite)
+    #rmsrootfile.Close()
     #find rms peaks
-    s=TSpectrum()
-    c1=TCanvas("c1","BPM rms",1024,768)
+    s=ROOT.TSpectrum()
+    c1=ROOT.TCanvas("c1","BPM rms",1024,768)
     rmstree.Draw("%s:Entry$"%leaves[0],"%s>0"%(leaves[0]))
-    graph=gPad.GetPrimitive("Graph")
-    meanrms=graph.GetRMS(2)
-    arms=TProfile("arms","arms",3000,0,entries)
-    rmstree.Draw("%s:Entry$>>arms"%leaves[0],"%s>0.08"%(leaves[0]),"same")
-    nfound=s.Search(arms,10,"same",0.1)
+    graph=ROOT.gPad.GetPrimitive("Graph")
     peakx=[]
-    for j in range(nfound):
-	peakx.append(int(s.GetPositionX()[j]))
-    c1.Print(rmspic,"png")
+    try:
+	meanrms=graph.GetRMS(2)
+	arms=ROOT.TProfile("arms","arms",3000,0,entries)
+	rmstree.Draw("%s:Entry$>>arms"%leaves[0],"%s>0.08"%(leaves[0]),"same")
+	nfound=s.Search(arms,10,"same",0.1)
+	for j in range(nfound):
+	    peakx.append(int(s.GetPositionX()[j]))
+	c1.Print(rmspic,"png")
+    except:
+	print "Warning!!! no valid rms data!!! please check if you have enough event!!!"	
     #find beam trip
     trippeaks,tripbackpeaks=[],[]
     oldtrip,oldtripback=0,0
@@ -562,4 +614,63 @@ def getposslowmove(pos,esplit):
 	splitentries.append([splitpoint,s[1]])
     return splitentries    
     
-    
+def getrealpos(raw,calconst,fitorder):
+    chan=[2,3,0,1]
+    ar,gx,gy=calconst[0]
+    xdiff_sum=(raw[chan[0]]-gx*raw[chan[1]])/(raw[chan[0]]+gx*raw[chan[1]])
+    ydiff_sum=(raw[chan[2]]-gy*raw[chan[3]])/(raw[chan[2]]+gy*raw[chan[3]])
+    xbyb2=xdiff_sum**2+ydiff_sum**2
+    xb2x=1./xbyb2-1./np.sqrt(xbyb2)*np.sqrt(1./xbyb2-1)
+    xdata=ar*xdiff_sum*xb2x
+    ydata=ar*ydiff_sum*xb2x
+    paranum=0 #total var number
+    calconst[1]=calconst[1]+[0]*(21-len(calconst[1]))
+    calconst[2]=calconst[2]+[0]*(21-len(calconst[2]))
+    x,y=0,0
+    pnx,pny=0,0
+    for i in range(max(fitorder)+1):
+	for j in range(i+1):
+	    if i-j<=fitorder[0] and j<=fitorder[1]:
+		x+=calconst[1][pnx]*pow(xdata,i-j)*pow(ydata,j)
+		pnx+=1
+	    if i-j<=fitorder[1] and j<=fitorder[0]:
+		y+=calconst[2][pny]*pow(ydata,i-j)*pow(xdata,j)
+		pny+=1
+    return x,y
+
+def getcurrfromraw(runpath,treename="T",forcefastbus=False):
+    rootpath,runfilename=os.path.split(runpath)
+    run=int(re.split("[_]",re.split("[.]",runfilename)[-2])[-1])
+    if run<100:run=int(re.split("[_]",re.split("[.]",os.path.split(runpath)[1])[-2])[-2])
+    period=runinfo()
+    currepics=period.current(run)
+    if currepics:return currepics
+    print "sorry no current info for run %i in database,will try to find it from rawdata first"%run
+    #get curr from raw
+    d=decode(runpath,treename,forcefastbus=forcefastbus)
+    d.autodecode()
+    nocurr=0.002 #below this current will deal as no current
+    pp=getpklpath(rootpath)
+    rawdata=pickle.load(open(pp.getpath("raw","curr",run),"rb"))
+    curr=filter(lambda x:x>nocurr,rawdata)
+    if len(curr)<len(rawdata)/50.:
+	currepics=0#if no current at 98% of time, will treat as no current
+    else:
+	avecurr=sum(curr)/len(curr)
+	currepics=avecurr*1000
+    #save to database
+    dbdir=os.getenv("BEAMDBPATH")
+    if dbdir==None:
+	print "please define BEAMDBPATH in your env"
+	return False
+    pydb=os.path.join(dbdir,"pyDB")
+    currdb=os.path.join(pydb,"runcurr.pdt")
+    currinfo=pickle.load(open(currdb,"rb"))
+    currinfo[run]=currepics
+    print "checked run:%i, current:%f nA"%(run,currepics)
+    try:
+	pickle.dump(currinfo,open(currdb,"wb",-1))
+	print "updated currinfo database,please share with other people for this file %s or send it to pengjia so that other people don't need to run it again."%currdb
+    except:
+	print "sorry can not update currinfo database, please check if you have permission to write in %s."%pydb
+    return currepics

@@ -3,7 +3,8 @@ import glob,os,re,urllib
 from numpy import *
 from array import *
 from odsread import odsread
-from ROOT import gROOT,TSpectrum,TObject,TFile,TTree,TProfile,TCanvas,TF1,TStyle,TLatex,gPad
+try:import ROOT
+except:print "Error!! pyroot didn't compiled! please recompile your root!"
 
 #find harp peak from raw harp scan data file and generate rootfile for all raw files
 def genharppeak(datapath,rootfilepath):
@@ -25,6 +26,9 @@ def genharppeak(datapath,rootfilepath):
 	'IHA1H05A.03052012_22:37:59', 'IHA1H05A.03052012_23:17:06', 'IHA1H05A.03052012_23:58:06', 'IHA1H05A.03062012_00:10:00',\
 	'IHA1H05A.03062012_00:31:07', 'IHA1H05A.03062012_00:50:47', 'IHA1H05A.03062012_02:39:58', 'IHA1H05A.03062012_03:17:57',\
 	'IHA1H05A.03062012_03:37:23', 'IHA1H05A.03062012_03:52:43', 'IHA1H05A.03062012_04:46:48', 'IHA1H05A.03132012_00:43:13',\
+	'IHA1H05A.03082012_01:20:01', 'IHA1H05A.03082012_02:04:54', 'IHA1H05A.03082012_02:14:09', 'IHA1H05A.03082012_03:01:07',\
+	'IHA1H05A.03082012_03:18:50', 'IHA1H05A.03082012_01:29:30', 'IHA1H05A.03082012_01:51:34', 'IHA1H05A.03082012_02:19:25',\
+	'IHA1H05A.03082012_02:34:07', 'IHA1H05A.03082012_02:35:37', 'IHA1H05A.03082012_03:23:00',\
 	'IHA1H05A.03132012_01:14:22', 'IHA1H05A.03132012_01:44:34', 'IHA1H05A.03132012_02:11:55', 'IHA1H05A.03132012_02:28:39',\
 	'IHA1H05A.03142012_03:12:09', 'IHA1H05A.03142012_03:56:07', 'IHA1H05A.03142012_04:29:13', 'IHA1H05A.03142012_04:42:46',\
 	'IHA1H05A.03162012_17:50:55', 'IHA1H05A.03162012_17:51:29', 'IHA1H05A.03162012_20:08:50', 'IHA1H05A.03162012_21:07:49',\
@@ -39,16 +43,16 @@ def genharppeak(datapath,rootfilepath):
 	'IHA1H05A.05032012_07:12:06', 'IHA1H05A.05092012_23:53:59', 'IHA1H05A.05102012_00:12:22', 'IHA1H05A.05102012_10:28:33',\
 	'IHA1H05A.05102012_10:51:17', 'IHA1H05A.05102012_11:09:53', 'IHA1H05A.05102012_11:26:01', 'IHA1H05A.05102012_11:46:32']
     filename.sort()
-    gROOT.Reset()
-    gROOT.SetBatch(True)
+    ROOT.gROOT.Reset()
+    ROOT.gROOT.SetBatch(True)
     rootfile = TFile(os.path.join(rootfilepath,"harpdata.root"),"RECREATE")
-    s=TSpectrum()
+    s=ROOT.TSpectrum()
     leaves,tree,branches,Vleaves,Vharp=[],[],[],[],[]
 
     for i in range(len(filename)):
 	fakename=filename[i].replace(":","").replace(".","_")
-	#make tree
-	tree.append(TTree("harp%i"%i,filename[i]))
+	    #make tree
+	tree.append(ROOT.TTree("harp%i"%i,filename[i]))
 	leaves.append(["index","pos","sig"])
 	Vleaves.append("index/F:pos/F:sig/F")
 	Vharp.append(array("f",[0.0,0.0,0.0]))
@@ -64,26 +68,26 @@ def genharppeak(datapath,rootfilepath):
             Vharp[i][2]=float(field[2])
             #print i,Vharp[i]
             tree[i].Fill()
-        tree[i].Write("",TObject.kOverwrite)
+        tree[i].Write("",ROOT.TObject.kOverwrite)
     #draw pic
     c,h=[],[]
-    t=TLatex()
+    t=ROOT.TLatex()
     t.SetTextAlign(10)
     t.SetTextSize(0.03)
     for j in range(len(filename)):
 	fakename=filename[j].replace(":","").replace(".","_")
-	c.append(TCanvas(fakename,"harp signal %s"%filename[j],1280,800))
+	c.append(ROOT.TCanvas(fakename,"harp signal %s"%filename[j],1280,800))
 	c[j].Divide(2,1)
 	c[j].cd(1)
-	fitpol=TF1("fitpol","pol1",0,40000)
+	fitpol=ROOT.TF1("fitpol","pol1",0,40000)
 	tree[j].Fit("fitpol","pos:index","pos>0","QR")
 	p0=fitpol.GetParameter(0)
 	p1=fitpol.GetParameter(1)
 	c[j].cd(2)
 	tree[j].Draw("sig:%f+index*%f"%(p0,p1))
-	graph=gPad.GetPrimitive("Graph")
+	graph=ROOT.gPad.GetPrimitive("Graph")
 	mean=graph.GetMean(2)
-	h.append(TProfile("h%i"%j,filename[j],300,5,90))
+	h.append(ROOT.TProfile("h%i"%j,filename[j],300,5,90))
 	tree[j].Draw("sig-%f:%f+index*%f>>h%i"%(mean,p0,p1,j))
 	nfound,threshold=0,0.5
 	while nfound<3:

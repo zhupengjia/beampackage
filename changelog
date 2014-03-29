@@ -1,3 +1,7 @@
+2014.3.27 rewrite most of the code,added sqlite database support
+---------------
+2013.8.17 updated bpmfit and bpmcalib
+---------------
 2013.8.6 changed insert method
 ---------------
 2013.8.1 optimize code,use numpy's array instead of build-in array,much better speed

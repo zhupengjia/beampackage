@@ -23,9 +23,8 @@ class epicst2v:
 #            print self.totline
 #            tt2=time.clock()
         except Exception as e:
-            print "file not existed or not available!!"
-            print e
-            sys.exit()
+	    print e
+            raise Exception("file not existed or not available!!")
 	tmptime=linecache.getline(self.epicsfilen,1)[0:10]
 	if tmptime.isdigit():
 	    self.valsplit=10
@@ -48,7 +47,7 @@ class epicst2v:
         if t>self.timeend or t<self.timestart:
             print "time out of range, please use range %s to %s"%(self.timestart,self.timeend)
             #sys.exit()
-	    return False
+	    return None
         found=0
         line1=1
         line2=int(self.totline/2)
