@@ -661,7 +661,8 @@ class getbpmeventcut(odsread):
 	    try:r=int(self.values[i][0])
 	    except:continue
 	    if run==r:
-		cut=self.values[i][1]
+		if fastbus:cut=self.values[i][2]
+		else:cut=self.values[i][1]
 		try:
 		    cut=[int(c) for c in re.split("[\s,]",cut)]
 		    if len(cut)<2:return False

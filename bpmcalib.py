@@ -54,7 +54,6 @@ class bpmcalib:
 	self.peak_05=[tmp[i]["harp05"] for i in range(tmp["ndata"])]
 	self.run=[tmp[i]["run"][0] for i in range(tmp["ndata"])]
 	self.pedrun=tmp["pedrun"][0]
-	self.pedrun=3001
 	try:self.availruns={"a":tmp["availa"],"b":tmp["availb"]}
 	except:self.availruns=False
 	print "calibrate bpm with run",self.run,"and pedestal run %i,"%self.pedrun,"keywords: ",self.keywords
@@ -146,21 +145,19 @@ class bpmcalib:
 	raw=pickle.load(open(bpmrawpkl,"rb"))
 	#ped or signal cut
 	if ped:
-	    rawcurr=pickle.load(open(currpkl,"rb"))
+	    curr=pickle.load(open(currpkl,"rb"))
 	    #get average curr
 	    nocurr=0.01 #below this current will deal as no signal
 	    currshift=500
-	    curr=filter(lambda x:x>nocurr,rawcurr)
-	    avecurr=sum(curr)/len(curr) if len(curr)>0 else 0
-	    curr1=[1 if c<nocurr else 0 for c in rawcurr]
-	    curr2=[0]*currshift+curr1[:-currshift]
-	    bpmavail=numpy.asarray(map(lambda c1,c2:c1*c2,curr1,curr2),dtype=numpy.int32)
+	    curr=curr<nocurr
+	    curr1=numpy.concatenate((numpy.zeros(currshift),curr[:-currshift]))
+	    bpmavail=curr*curr1
 	else:
 	    bpmavail=pickle.load(open(availpkl,"rb"))
 	#event cut
 	if not eventcut:
 	    ecut=getbpmeventcut()
-	    eventcut=ecut.getcut(run)
+	    eventcut=ecut.getcut(run,self.forcefastbus)
 	#filter the unwanted event
 	if eventcut:
 	    if (len(bpmavail)-eventcut[1])>=0:

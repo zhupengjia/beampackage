@@ -212,14 +212,18 @@ class decode:
 	for runpath in self.rootfiles:
 	    rootfiles[runpath]=ROOT.TFile(runpath,"READ")
 	    if rootfiles[runpath].IsZombie():
-		print "Error! no file %s exists!"%runpath
+		print "Error! file %s abnormal! please redecode it!"%runpath
 		if runpath==self.rootfiles[0]:return False
 		else:
 		    rootfiles[runpath].Close()
 		    rootfiles[runpath]=False
 		    continue
-	    trees[runpath]=rootfiles[runpath].Get(self.treename)
-	    events[runpath]=trees[runpath].GetEntries()
+	    try:
+		trees[runpath]=rootfiles[runpath].Get(self.treename)
+		events[runpath]=trees[runpath].GetEntries()
+	    except:
+		print "Error! file %s abnormal! please redecode it!"%runpath
+		continue
 	    #get happex total entries
 	    ff+=1
 	    if any([self.pklon[v] for v in ["rbpm","curr","hapevent"]]):
@@ -329,7 +333,7 @@ class decode:
 			if self.pklon["rbpm"]:
 			    if self.fastbus:
 				for j in range(8):
-				    bpmraw[j][ehap]=fbbpmraw[j][-1]
+				    bpmraw[j][ehap]=fbbpmraw[j][enorm]
 			    else:
 				for j in range(8):
 				    bpmraw[j][ehap]=lbpmrawleaf[j].GetValue(i)
