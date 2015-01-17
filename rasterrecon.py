@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 import re,os,time,glob,sys,numpy
-try:import cPickle as pickle
-except:import pickle
 try:import ROOT
 except:print "Error!! pyroot didn't compiled! please recompile your root!"
 from array import array
 from harppos import bpmpos
-from runinfo import runinfo,getpklpath,sortrun
+from runinfo import runinfo,getpklpath,sortrun,zload,zdump
 from bpminsert import tgtpos_straight,tgtpos_field,bpminsertparaprep
 from signalfilter import decode
 
@@ -20,7 +18,7 @@ class rasterrecon:
 	self.rasterchan=[0,1]#chan in pkl file
 	
     def runinit(self,runpath=False,forcefastbus=False):
-	self.rootpath,runfilename=os.path.split(runpath)
+	rootpath,runfilename=os.path.split(runpath)
 	self.run=int(re.split("[_]",re.split("[.]",runfilename)[-2])[-1])
 	self.pklpath=getpklpath(rootpath)
 	self.clkpkl=self.pklpath.getpath("raw","clock",self.run)
@@ -31,7 +29,7 @@ class rasterrecon:
 	    print self.clkpkl
 	    print "sorry no clock info in rootfile,please replay again"
 	    return False
-	self.clkraw=array("d",pickle.load(open(self.clkpkl,"rb")))
+	self.clkraw=array("d",zload(self.clkpkl))
 	self.events=len(self.clkraw)
 	return True
 	
@@ -85,7 +83,7 @@ class rasterrecon:
 	if not os.path.exists(self.rasterpkl):
 	    print "sorry no raster info in rootfile,please replay again"
 	    return False
-	self.rasterraw=[array("d",a) for a in pickle.load(open(self.rasterpkl,"rb"))]
+	self.rasterraw=[array("d",a) for a in zload(self.rasterpkl)]
 	eventrange[1]=eventrange[1] if eventrange[1]<self.events else self.events
 	self.size=[]
 	for i in range(2):
@@ -99,9 +97,9 @@ class rasterrecon:
 	self.bpmpkl,self.bpmpos=[],[]
 	for ab in bpms:
 	    self.bpmpkl.append(self.pklpath.getpath("pos","fbpm%srot"%ab,self.run))
-	    self.bpmpos.append(pickle.load(open(self.bpmpkl[-1],"rb")))
+	    self.bpmpos.append(zload(self.bpmpkl[-1]))
 	    self.bpmavailpkl=self.pklpath.getpath("raw","fbpmavail",self.run)
-	    self.bpmavail=pickle.load(open(self.bpmavailpkl,"rb"))
+	    self.bpmavail=zload(self.bpmavailpkl)
 	self.sizeinbpm=[]
 	for i in range(2):#x,y
 	    self.sizeinbpm.append([])
@@ -258,11 +256,11 @@ class slrecon(rasterrecon):
     
     def getphaseall(self):
 	if os.path.exists("aa.pkl"):
-	    self.phaseall=pickle.load(open("aa.pkl","rb"))
+	    self.phaseall=zload("aa.pkl")
 	    return
 	step=2000
 	self.eventpkl=self.pklpath.getpath("raw","event",self.run)
-	self.event=pickle.load(open(self.eventpkl,"rb"))
+	self.event=zload(self.eventpkl)
 	splitentries,splitevents,amphases,phases=[],[],[],[]
 	for i in range(0,self.events,step):
 	    istep=i+step if i+step<self.events else self.events-1
@@ -299,7 +297,7 @@ class slrecon(rasterrecon):
 	    amphases.append(amphase)
 	    phases.append(phase)
 	self.phaseall={"splitentries":splitentries,"splitevents":splitevents,"amphase":amphases,"phase":phases}
-	pickle.dump(self.phaseall,open("aa.pkl","wb",-1))
+	zdump(self.phaseall,"aa.pkl")
 	    
     def getrebuiltvalue(self,xy,clkvalue):
 	#get rebuilt adc raster value for each event

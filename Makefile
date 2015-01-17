@@ -1,6 +1,7 @@
 CC=g++
 SFLAGS=-fPIC -shared
 SRC=$(wildcard *.c)
+
 OBJS=$(SRC:.c=.so)
 
 all:$(OBJS)

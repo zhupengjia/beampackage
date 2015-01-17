@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 import os,sys,numpy
-try:import cPickle as pickle
-except:import pickle
 from runinfo import calibsetting
 
 class bpmfit:

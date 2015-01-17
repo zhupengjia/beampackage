@@ -1,21 +1,20 @@
 #!/usr/bin/env python
 import re,os,glob,sys,gc,ctypes,time
 import numpy as np
-try:import cPickle as pickle
-except:import pickle
 try:import ROOT
-except:print "Error!! pyroot didn't compiled! please recompile your root!"
+except:print "Error!! pyroot didn't compile! please recompile your root!"
 from array import array
 #from pylab import plot,show,subplot
 from bcmconst import *
-from runinfo import getpklpath,runinfo
+from runinfo import getpklpath,runinfo,zload,zdump
 try:from scipy.signal import butter,freqz,lfilter
 except Exception as err:
     print err
     print "sorry no scipy module found from your computer,it is needed to filter the bpm raw data infomation, please install it first"
 
+#low pass filter added for raw ADC signal
 def lowfilter(raw,cutfreq):
-    n=4 
+    n=4
     fs=960.015 #sample rate,here is helicity rate
     fc=2*cutfreq/fs #Normalize LPF cutoff frequency to Nyquist frequency
     if fc>=1:return raw
@@ -33,6 +32,7 @@ def lowfilter(raw,cutfreq):
     sf=lfilter(b,a,raw)
     return np.float32(sf)
 
+#similar as lowfilter, but use average instead
 def signalave(raw,avefreq):
     fs=960.015 #trigger rate,here is helicity rate
     if 2*avefreq>=fs:return raw
@@ -46,6 +46,7 @@ def signalave(raw,avefreq):
     del Vave
     return averaw
 
+#get the total ram of computer
 def getmemory():
     try:
 	for line in open("/proc/meminfo","r"):
@@ -53,6 +54,7 @@ def getmemory():
 		return int(re.split("[:kB]","".join(re.split("\s",line)))[1])*1000
     except:return 2054132000
 
+#used to average the signal, combine with Cavestack.c and signalave function 
 class Cavestack:
     def __init__(self,size=7500,ransize=0):
 	try:
@@ -108,80 +110,102 @@ class decode:
     def __init__(self,runpath,treename="T",firstevent=-1,lastevent=-1,forceredecode=0,buildtree=0,forcefastbus=False):
 	self.info=runinfo()
 	self.bcmconst=bcmconst()
-	self.runpath=runpath
+	self.runpath=os.path.abspath(runpath)
 	self.treename=treename
 	self.firstevent=firstevent
 	self.lastevent=lastevent
 	self.forceredecode=forceredecode
+	self.redecode=True
 	self.buildtree=buildtree
 	self.forcefastbus=forcefastbus
-	self.fastbus=forcefastbus
 	self.rootfilepath,self.runfilename=os.path.split(self.runpath)
 	self.run=int(re.split("[_]",re.split("[.]",self.runfilename)[-2])[-1])
 	if self.run<100:self.run=int(re.split("[_]",re.split("[.]",os.path.split(self.runpath)[1])[-2])[-2])
+	if not self.info.ifhapavail(self.run) or self.forcefastbus:self.fastbus=True
+	else:self.fastbus=False
 	self.arm="L" if self.run<20000 else "R"
 	self.pp=getpklpath(self.rootfilepath)
 	self.pklprefix="raw"
 	self.pklpathn=[["rbpm","curr","hapevent","sbpm","ssbpm","fbpm","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event","fbbpm"]]
+	self.pkldecoden=["rbpm","curr","hapevent","raster","clock","event","fbbpm"]
 	#decide if decode
-	self.manualset=False
+	#self.manualset=False
 	self.pklon={}
 	self.setpklon(False)
-		
+
     def setpklon(self,value):
 	for m in self.pklpathn:
 	    for n in m:
 		self.pklon[n]=value
-	
+
     def getrootfilefamily(self):
-	self.rootfiles=glob.glob(os.path.join(self.rootfilepath,self.runfilename.replace(".root","_*.root"))) 
+	self.rootfiles=glob.glob(os.path.join(self.rootfilepath,self.runfilename.replace(".root","_*.root")))
 	self.rootfiles.append(os.path.join(self.rootfilepath,self.runfilename))
-	self.rootfiles.sort()    
-    
+	self.rootfiles.sort()
+
     #check if needed redecode
     def checkifredecode(self):
-	if not self.info.ifhapavail(self.run) or self.forcefastbus:self.fastbus=True
-	else:self.fastbus=False
 	#check if decoded file is fastbus or not
 	fbbpmpkl=self.pp.getpath(self.pklprefix,"fbbpm",self.run)
 	fbbpmpkl2=self.pp.getpath(self.pklprefix,"fbbpm",self.run,1)
 	if self.forcefastbus:
 	    if not os.path.exists(fbbpmpkl):
+		print "set forceredecode to 1 since forcefastbus"
 		self.forceredecode=1
 	elif not self.fastbus:
 	    if os.path.exists(fbbpmpkl):
 		if os.path.exists(fbbpmpkl2):
+		    print "set forceredecode to 1 since no fastbus info"
 		    self.forceredecode=1
 		    try:os.remove(fbbpmpkl2)
 		    except:raise Exception("sorry can not remove file %s, please check if you have permission in this directory"%fbbpmpkl2)
 		elif not os.path.exists(self.pp.getpath(self.pklprefix,"rbpm",self.run,1)):
+		    print "set forceredecode to 1 since no bpm info"
 		    self.forceredecode=1
 	#check event
 	eventtolerate=100
 	if not self.fastbus:
+	    print "use happex, set fbbpm to False"
 	    self.pklon["fbbpm"]=False
 	if not self.forceredecode:
 	    hapeventpkl=self.pp.getpath(self.pklprefix,"hapevent",self.run)
 	    if os.path.exists(hapeventpkl):
-		hapevent=pickle.load(open(hapeventpkl,"rb"))
-		if (self.firstevent<0 or abs(hapevent[0]-self.firstevent)<eventtolerate) and (self.lastevent<0 or abs(self.lastevent-hapevent[-1])<eventtolerate):
+		hapevent=zload(hapeventpkl)
+		print "rootfile event:%i-%i,pkl hapevent:%i-%i"%(self.firstevent,self.lastevent,hapevent[0],hapevent[-1])
+		if (self.firstevent<0 or hapevent[0]-self.firstevent<eventtolerate) and (self.lastevent<0 or self.lastevent-hapevent[-1]<eventtolerate):
 		    for key in self.pklpathn[0]:
-			if os.path.exists(self.pp.getpath(self.pklprefix,key,self.run)):
+			pklpath=self.pp.getpath(self.pklprefix,key,self.run)
+			if os.path.exists(pklpath):
+			    print "file %s exists, set %s to False"%(pklpath,key)
 			    self.pklon[key]=False
+			else:
+			    print "file %s not exists, set %s to True"%(pklpath,key)
+		else:
+		    print "events not enough in happex pkl files,will set all happex keys to true"
 		del hapevent
 	    eventpkl=self.pp.getpath(self.pklprefix,"event",self.run)
 	    if os.path.exists(eventpkl):
-		event=pickle.load(open(eventpkl,"rb"))
-		if (self.firstevent<0 or abs(event[0]-self.firstevent)<eventtolerate) and (self.lastevent<0 or abs(self.lastevent-event[-1])<eventtolerate):
+		event=zload(eventpkl)
+		print "rootfile event:%i-%i,pkl event:%i-%i"%(self.firstevent,self.lastevent,event[0],event[-1])
+		if (self.firstevent<0 or event[0]-self.firstevent<eventtolerate) and (self.lastevent<0 or self.lastevent-event[-1]<eventtolerate):
 		    for key in self.pklpathn[1]:
-			if os.path.exists(self.pp.getpath(self.pklprefix,key,self.run)):
-			    self.pklon[key]=False    
-    
+			pklpath=self.pp.getpath(self.pklprefix,key,self.run)
+			if os.path.exists(pklpath):
+			    print "file %s exists, set %s to False"%(pklpath,key)
+			    self.pklon[key]=False
+			else:
+			    print "file %s not exists, set %s to True"%(pklpath,key)
+		else:
+		    print "events not enough in normal daq pkl files,will set all normal daq keys to true"
+	self.redecode=any([self.pklon[n] for n in self.pkldecoden])
+	print self.pklon,self.redecode
+
     #decode from rootfile,leaves should be in self.pklpathn
     def decodefromrootfile(self):
 	if not any(self.pklon.values()):return True
 	ROOT.gROOT.SetBatch(True)
 	#raw leaves
+	print "decoding from rootfile now..."
 	eventleaf="fEvtHdr.fEvtNum" #event number
 	thappexprefix="happex.%s."%self.arm
 	numringleaf="%snumring"%thappexprefix
@@ -233,7 +257,12 @@ class decode:
 		    hapevents[runpath]=int(h1.GetEntries())
 		    del h1
 		except:
-		    raise Exception("Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0])
+		    print "Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0]
+		    for l in self.pkldecoden:
+			self.pklon[l]=False
+		    if not os.path.exists(self.pp.getpath(self.pklprefix,"rbpm",self.run)):
+			raise Exception("Error!! no bpm information avail for both rootfile and pkls!!!")
+		    return
 	totevents=sum(events.values())
 	tothapevents=sum(hapevents.values())
 	#init raw array
@@ -258,12 +287,17 @@ class decode:
 		try:
 		    if self.fastbus:
 			lbpmrawleaf=[trees[runpath].GetLeaf(l) for l in bpmrawleaf]
-		    else:    
+		    else:
 			bpmrawbranch=[trees[runpath].GetBranch(l) for l in bpmrawleaf]
 			lbpmrawleaf=[b.GetLeaf("data") for b in bpmrawbranch]
-		    lbpmrawleaf[0].GetNdata()
+		    lbpmrawleaf[0].GetNdata() #check if leaf available
 		except:
-		    raise Exception("Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0])
+		    print "Error!! no leaf %s in your rootfile!!"%bpmrawleaf[0]
+		    for l in self.pkldecoden:
+			self.pklon[l]=False
+		    if not os.path.exists(self.pp.getpath(self.pklprefix,"rbpm",self.run)):
+			raise Exception("Error!! no bpm information avail for both rootfile and pkls!!!")
+		    return
 	    if self.pklon["curr"]:
 		if hapbcmavailall:
 		    try:
@@ -328,7 +362,9 @@ class decode:
 				bcmraw[i]=getcurr(bcmraw[i],scalerbcmconst[i],"sis3800","slow")
 		if hapavail:
 		    numring=int(lnumringleaf.GetValue())
-		    if numring<1:continue
+		    if numring<1:
+			enorm+=1
+			continue
 		    for i in range(numring):
 			if self.pklon["rbpm"]:
 			    if self.fastbus:
@@ -350,31 +386,32 @@ class decode:
 	    rootfiles[runpath].Close()
 	try:
 	    if self.pklon["curr"] and len(curr)>100:
-		pickle.dump(curr,open(self.pp.getpath(self.pklprefix,"curr",self.run,1),"wb",-1),-1)
+		zdump(curr,self.pp.getpath(self.pklprefix,"curr",self.run,1))
 	    if self.pklon["rbpm"] and len(bpmraw[0])>100:
-		pickle.dump(bpmraw,open(self.pp.getpath(self.pklprefix,"rbpm",self.run,1),"wb",-1),-1)
+		zdump(bpmraw,self.pp.getpath(self.pklprefix,"rbpm",self.run,1))
 	    if self.pklon["fbbpm"] and len(fbbpmraw[0])>100:
-		pickle.dump(fbbpmraw,open(self.pp.getpath(self.pklprefix,"fbbpm",self.run,1),"wb",-1),-1)
+		zdump(fbbpmraw,self.pp.getpath(self.pklprefix,"fbbpm",self.run,1))
 	    if self.pklon["hapevent"] and len(hapevent)>100:
-		pickle.dump(hapevent,open(self.pp.getpath(self.pklprefix,"hapevent",self.run,1),"wb",-1),-1)
+		zdump(hapevent,self.pp.getpath(self.pklprefix,"hapevent",self.run,1))
 	    if self.pklon["event"] and len(event)>100:
-		pickle.dump(event,open(self.pp.getpath(self.pklprefix,"event",self.run,1),"wb",-1),-1)
+		zdump(event,self.pp.getpath(self.pklprefix,"event",self.run,1))
 	    if self.pklon["clock"] and len(clkraw)>100:
-		pickle.dump(clkraw,open(self.pp.getpath(self.pklprefix,"clock",self.run,1),"wb",-1),-1)
+		zdump(clkraw,self.pp.getpath(self.pklprefix,"clock",self.run,1))
 	    if self.pklon["raster"] and len(rasterraw[0])>100:
-		pickle.dump(rasterraw,open(self.pp.getpath(self.pklprefix,"raster",self.run,1),"wb",-1),-1)
+		zdump(rasterraw,self.pp.getpath(self.pklprefix,"raster",self.run,1))
 	except:
 	    raise Exception("\n\n\n\nError!failed to dump for bpm data,do you have write permission in dir %s?"%self.rootfilepath)
 	del curr,bpmraw,fbbpmraw,rasterraw,clkraw,hapevent,event
 	gc.collect()
-	
+
     def bpmdatafilt(self):
 	if any(self.pklon[x] for x in ["sbpm","ssbpm","fbpm"]):
-	    bpmraw=pickle.load(open(self.pp.getpath(self.pklprefix,"rbpm",self.run),"rb"))
+	    bpmraw=zload(self.pp.getpath(self.pklprefix,"rbpm",self.run))
 	    filteredbpmraw=[[0]*8,[0]*8,[0]*8]
 	    filtertype=[self.info.filter1type,self.info.filter2type,self.info.filter3type]
 	    filterfreq=[self.info.filter1,self.info.filter2,self.info.filter3]
 	    filtername=["sbpm","fbpm","ssbpm"]
+	    print filterfreq
 	    if len(bpmraw[0])<100:return True
 	    for i in range(7,-1,-1):
 		print "filtering for bpm channel %i"%i
@@ -389,7 +426,7 @@ class decode:
 	    try:
 		for j in range(3):
 		    if self.pklon[filtername[j]]:
-			pickle.dump(filteredbpmraw[j],open(self.pp.getpath(self.pklprefix,filtername[j],self.run,1),"wb",-1),-1)
+			zdump(filteredbpmraw[j],self.pp.getpath(self.pklprefix,filtername[j],self.run,1))
 	    except:
 		raise Exception("\n\n\n\nError!failed to dump for bpm data,do you have write permission in dir %s?"%self.rootfilepath)
 	    del filteredbpmraw
@@ -403,21 +440,22 @@ class decode:
 	    filterfreq=[self.info.filter1,self.info.filter2,self.info.filter3]
 	    currpkl=self.pp.getpath(self.pklprefix,"curr",self.run)
 	    if os.path.exists(currpkl):
-		curr=pickle.load(open(currpkl,"rb"))
+		curr=zload(currpkl)
 		curr=curr>curravail
 		for i in range(3):
 		    if self.pklon[availname[i]]:
 			currshift=int(1000/filterfreq[i]+0.9)
 			currshift=minshift if currshift<minshift else currshift
 			curr1=numpy.concatenate((numpy.zeros(currshift),curr[:-currshift]))
-			bpmavail=curr*curr1
+			bpmavail=(curr*curr1).astype(numpy.bool_)
 			try:
-			    pickle.dump(bpmavail,open(self.pp.getpath(self.pklprefix,availname[i],self.run,1),"wb",-1),-1)
+			    zdump(bpmavail,self.pp.getpath(self.pklprefix,availname[i],self.run,1))
 			except:
 			    raise Exception("\n\n\n\nError!failed to dump for bpm data,do you have write permission in dir %s?"%self.rootfilepath)
-	    del curr,curr1,bpmavail
+	    try:del curr,curr1,bpmavail
+	    except:pass
 	    gc.collect()
-		
+
     def autodecode(self):
 	self.setpklon(True)
 	for x in ["self.getrootfilefamily()","self.checkifredecode()","self.decodefromrootfile()","self.bpmdatafilt()"]:
@@ -427,9 +465,10 @@ class decode:
 	    print "use time for %s: "%x,t2-t1
 	if self.buildtree:fillbpmrawtree(self.run,self.rootfilepath)
 	return True
- 
+
+#automatically fill the tree from all of the bpm pkls
 def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
-    print "filling bpm raw trees for run %i"%run   
+    print "filling bpm raw trees for run %i"%run
     ##pkl file list
     pp=getpklpath(rootpath)
     pklfilen=[["rbpm","sbpm","ssbpm","fbpm","curr","hapevent","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event","fbbpm"]]
@@ -451,12 +490,12 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 	    fn=os.path.split(p)[1]
 	    pklfilen[0].append("pos_"+fn.split("_")[1])
     pklfilen[0].append("pos_rms")
-    #get pkl file size and group them as total size 
+    #get pkl file size and group them as total size
     insertgroup=[]
     reverseram=3e8 #reverse memory,300mb
     maxsetram=2e9 #2gb memory maximum
     maxram=getmemory()
-    maxram=maxram if maxram<maxsetram else maxsetram  
+    maxram=maxram if maxram<maxsetram else maxsetram
     maxram=maxram-reverseram
     for p in range(len(pklfilen)):
 	insertgroup.append([[]])
@@ -474,7 +513,7 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
     firstopen=True
     for p in range(len(insertgroup)):
 	for f in range(len(insertgroup[p])):
-	    Nfile=len(insertgroup[p][f]) 
+	    Nfile=len(insertgroup[p][f])
 	    if Nfile<1:continue
 	    if firstopen:
 		bpmrootfile=ROOT.TFile(os.path.join(rootpath,"%s_%i.root"%(fileprefix,run)),"RECREATE")
@@ -491,7 +530,7 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 	    numentry,numvar=[],[]
 	    for pf in range(Nfile):
 		fn=pp.getpath("",insertgroup[p][f][pf],run)
-		data[pf]=pickle.load(open(fn,"rb"))
+		data[pf]=zload(fn)
 		dataleaves=insertgroup[p][f][pf]
 		if "-" in dataleaves:dataleaves=dataleaves.replace("-","m")
 		branchname=dataleaves
@@ -541,6 +580,7 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
 	    del data,Vdata,tree,branch
 	    gc.collect() #recycle memory
 
+#get the beam rms leaf, used to judge the sharp beam move
 def getposrms(rms,rmspic="rms.png"):
     #from pylab import plot,show
     #plot(rms)
@@ -575,7 +615,7 @@ def getposrms(rms,rmspic="rms.png"):
 	    peakx.append(int(s.GetPositionX()[j]))
 	c1.Print(rmspic,"png")
     except:
-	print "Warning!!! no valid rms data!!! please check if you have enough event!!!"	
+	print "Warning!!! no valid rms data!!! please check if you have enough event!!!"
     #find beam trip
     trippeaks,tripbackpeaks=[],[]
     oldtrip,oldtripback=0,0
@@ -605,6 +645,7 @@ def getposrms(rms,rmspic="rms.png"):
 	splitentries.append(finaltrips[i:i+2])
     return splitentries
 
+#judge the slow beam move
 def getposslowmove(pos,esplit):
     splitentries=[]
     mineventsmove=5000
@@ -626,8 +667,9 @@ def getposslowmove(pos,esplit):
 		splitentries.append([splitpoint,int(e-aveevents/2.)])
 		splitpoint=int(e-aveevents/2.)
 	splitentries.append([splitpoint,s[1]])
-    return splitentries    
-    
+    return splitentries
+
+#calculate position from raw and constant
 def getrealpos(raw,calconst,fitorder):
     chan=[2,3,0,1]
     ar,gx,gy=calconst[0]
@@ -652,6 +694,7 @@ def getrealpos(raw,calconst,fitorder):
 		pny+=1
     return x,y
 
+#get the beam current from rootfile
 def getcurrfromraw(runpath,treename="T",forcefastbus=False):
     rootpath,runfilename=os.path.split(runpath)
     run=int(re.split("[_]",re.split("[.]",runfilename)[-2])[-1])
@@ -665,13 +708,12 @@ def getcurrfromraw(runpath,treename="T",forcefastbus=False):
     d.autodecode()
     nocurr=0.002 #below this current will deal as no current
     pp=getpklpath(rootpath)
-    rawdata=pickle.load(open(pp.getpath("raw","curr",run),"rb"))
-    curr=filter(lambda x:x>nocurr,rawdata)
+    rawdata=zload(pp.getpath("raw","curr",run))
+    
+    curr=rawdata[rawdata>=nocurr]
     if len(curr)<len(rawdata)/50.:
-	currepics=0#if no current at 98% of time, will treat as no current
-    else:
-	avecurr=sum(curr)/len(curr)
-	currepics=avecurr*1000
+	curr=rawdata[rawdata<nocurr] #if no current at 98% of time, will treat as no current
+    currepics=np.nanmean(curr)*1000
     #save to database
     dbdir=os.getenv("BEAMDBPATH")
     if dbdir==None:
@@ -679,11 +721,11 @@ def getcurrfromraw(runpath,treename="T",forcefastbus=False):
 	return False
     pydb=os.path.join(dbdir,"pyDB")
     currdb=os.path.join(pydb,"runcurr.pdt")
-    currinfo=pickle.load(open(currdb,"rb"))
+    currinfo=zload(currdb)
     currinfo[run]=currepics
     print "checked run:%i, current:%f nA"%(run,currepics)
     try:
-	pickle.dump(currinfo,open(currdb,"wb",-1))
+	zdump(currinfo,currdb)
 	print "updated currinfo database,please share with other people for this file %s or send it to pengjia so that other people don't need to run it again."%currdb
     except:
 	print "sorry can not update currinfo database, please check if you have permission to write in %s."%pydb

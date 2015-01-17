@@ -1,16 +1,15 @@
 #!/usr/bin/env python
 import os,re,shutil,numpy,sys,time,ctypes,bisect
-try:import cPickle as pickle
-except:import pickle
 from urllib import urlretrieve
 try:import ROOT
 except:print "Error!! pyroot didn't compiled! please recompile your root!"
 from array import array
 from bcmconst import *
 from harppos import bpmpos
-from runinfo import runinfo,getpklpath,rasterconstread
+from runinfo import runinfo,getpklpath,rasterconstread,zload,zdump
 from signalfilter import *
 
+#remove the existed branch
 def removebranch(tree,branchname):
     removeb=tree.GetBranch(branchname)
     removel=tree.GetLeaf(branchname)
@@ -21,10 +20,10 @@ def removebranch(tree,branchname):
 	tree.GetListOfLeaves().Remove(removel)
 	tree.GetListOfLeaves().Compress()
     
-def bpmbeamdriftprep(runorbit,tgtz):
+#prepare the transported function from bpms to target, combine with *.c code
+def bpmbeamdriftprep(runorbit,tgtz,path=os.path.join(os.getenv("BEAMDBPATH"),"pyDB")):
     if runorbit<=0:return 0
     FourFloat=ctypes.c_float*4
-    path=os.path.join(os.getenv("BEAMDBPATH"),"pyDB")
     posmap,map_x,map_y,map_theta,map_phi={},{},{},{},{}
     for z in tgtz:
 	intz=int(z)
@@ -46,6 +45,7 @@ def bpmbeamdriftprep(runorbit,tgtz):
 	    map_x[intz],map_y[intz],map_theta[intz],map_phi[intz]=False,False,False,False
     return map_x,map_y,map_theta,map_phi,FourFloat
 
+#prepare the parameters before insert
 def bpminsertparaprep(runpath,treename="T",forcefastbus=False):
     rootfilepath,runfilename=os.path.split(runpath)
     run=int(re.split("[_]",re.split("[.]",runfilename)[-2])[-1])
@@ -57,12 +57,18 @@ def bpminsertparaprep(runpath,treename="T",forcefastbus=False):
     tmp=period.bpmconstread(run,forcefastbus)
     if not tmp["a"] or not tmp["b"]:
 	print "sorry no constant found for run %i"%run
-	return False
-    pedestal=tmp["a"]["ped"]+tmp["b"]["ped"]
-    bpmoffset=tmp["a"]["offset"]+tmp["b"]["offset"]
-    tgtz=tmp["a"]["tgtz"]
-    calconst={"a":tmp["a"]["const"],"b":tmp["b"]["const"]}
-    fitorder={"a":tmp["a"]["fitorder"],"b":tmp["b"]["fitorder"]}
+	pedestal,bpmoffset,tgtzc,calconst,fitorder=False,False,[0],{"a":False,"b":False},False
+    else:
+	pedestal=tmp["a"]["ped"]+tmp["b"]["ped"]
+	bpmoffset=tmp["a"]["offset"]+tmp["b"]["offset"]
+	tgtzc=tmp["a"]["tgtz"]
+	fitorder={"a":tmp["a"]["fitorder"],"b":tmp["b"]["fitorder"]}
+	calconst={"a":tmp["a"]["const"],"b":tmp["b"]["const"]}
+    #check which target 
+    tgtz=[]
+    for z in period.gettgtz(run):
+	if z in tgtzc:
+	   tgtz.append(z)
     #get raster calibration constant
     rasterconst=rasterconstread(run)
     #for non straight through,import mapping function
@@ -71,15 +77,21 @@ def bpminsertparaprep(runpath,treename="T",forcefastbus=False):
 	"calconst":calconst,"fitorder":fitorder,"posmapfun":posmapfun,"rasterconst":rasterconst}
     return para
 
-def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False):
+#insert the bpm info to existed rootfile
+#additional should be a dict, like {leafname:pklfilename}, pklfile should be a numpy array and aligned with beam events, or {leafname:[varpklfile,evnumpklfile]}, varpklfile is a numpy array and aligned with events array in evnumpklfile.pklfile can also add id/key like pklfilename~evnum, means pklfilename['evnum'] will be read 
+def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False,backup=True,additional={}):
+    constavail=True
     para=bpminsertparaprep(runpath,treename,forcefastbus)
-    if not para:return False
+    if not para["calconst"]["a"]:
+	constavail=False
     run,tgtz=para["run"],para["tgtz"]
     tgtz=[int(z) for z in tgtz]
     #get extra file
     rootfilepath,runfilename=os.path.split(runpath)
     pp=getpklpath(rootfilepath)
     info=runinfo()
+    current=info.current(run)
+    targetoffset=info.getsqlinfo(run,"TargetOffsetmm")
     arm="L" if run<20000 else "R"
     rootfiles=glob.glob(os.path.join(rootfilepath,runfilename.replace(".root","_*.root")))
     rootfiles.append(runpath)
@@ -88,15 +100,18 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
 	print "can not find file %s,will try to insert as separate file"%runpath
 	separatefile=1
     #backup rootfile
-    for runpath in rootfiles:
-	print "back up rootfiles..."
-	try:
-	    if not os.path.exists(runpath+"_bak"):
-		shutil.copy(runpath,runpath+"_bak")
-	    else:shutil.copy(runpath+"_bak",runpath)
-	except:
-	    print "no file %s exists"%runpath
-	    return False
+    if separatefile==0:
+	for runpath in rootfiles:
+	    try:
+		if not os.path.exists(runpath+"_bak"):
+		    if backup:
+			print "back up rootfile %s"%runpath
+			shutil.copy(runpath,runpath+"_bak")
+		else:
+		    print "restore rootfile %s"%runpath
+		    shutil.copy(runpath+"_bak",runpath)
+	    except Exception as err:
+		raise Exception("file %s abnormal"%runpath)
     #scan rootfile events
     eventleaf="fEvtHdr.fEvtNum" #event number
     rootfileinfo={}
@@ -141,29 +156,62 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
 	t2=time.time()
 	print "use time:",t2-t1
     #get raw data
-    getposfromraw(para,runpath,treename,firstevent,lastevent,forceredecode=forceredecode,forcefastbus=forcefastbus) 
-    if separatefile>0:
-	fillbpmrawtree(run,rootfilepath,"bpmpos")
-	return
-    elif separatefile<0:return
+    if constavail:
+	getposfromraw(para,runpath,treename,firstevent,lastevent,forceredecode=forceredecode,forcefastbus=forcefastbus) 
+	if separatefile>0:
+	    fillbpmrawtree(run,rootfilepath,"bpmpos")
+	    return
+	elif separatefile<0:return
+    else:
+	if separatefile!=0:return
+    #load additional pkls
+    def recpkl(v,keys): #recursion to get final value from var
+	if len(keys)<1:return v
+	elif len(keys)<2:
+	    try:return v[keys[0]]
+	    except:return None
+	else:
+	    return recpkl(v[keys[0]],keys[1:])
+    def loadpkl(v):#load value in pkl's deep structure
+	v=v.split("~")
+	if len(v)<2:keys=[]
+	else:keys=v[1:]
+	if not os.path.exists(v[0]):return None
+	return recpkl(zload(v[0]),keys)
+    for k in additional.keys():
+	if isinstance(additional[k],str):
+	    additional[k]=loadpkl(additional[k])
+	    if additional[k]==None:del additional[k]
+	elif len(additional[k])<2:
+	    additional[k]=loadpkl(additional[k][0])
+	    if additional[k]==None:del additional[k]
+	else:
+	    additional[k]=[loadpkl(additional[k][i]) for i in range(2)]
+	    if None in additional[k]:del additional[k]
+    additionalkeys=additional.keys() 
     #sort events
-    hapevent=pickle.load(open(pp.getpath("raw","hapevent",run),"rb"))
-    eevent=pickle.load(open(pp.getpath("raw","event",run),"rb"))
+    hapevent=zload(pp.getpath("raw","hapevent",run))
+    eevent=zload(pp.getpath("raw","event",run))
     for rf in rootfileinfo.keys():
 	if rootfileinfo[rf]["avail"]:
-	    rootfileinfo[rf]["eevoff"]=bisect.bisect_left(eevent,rootfileinfo[rf]["evnum"][0])
-	    rootfileinfo[rf]["lhapev"]=numpy.searchsorted(hapevent,rootfileinfo[rf]["evnum"])
-	    #rootfileinfo[rf]["rhapev"]=numpy.searchsorted(hapevent,rootfileinfo[rf]["evnum"],side="right")
-	    rootfileinfo[rf]["lhapev"]=numpy.where(rootfileinfo[rf]["lhapev"]<len(hapevent),rootfileinfo[rf]["lhapev"],len(hapevent)-1)
-	    #rootfileinfo[rf]["rhapev"]=numpy.where(rootfileinfo[rf]["rhapev"]<len(hapevent),rootfileinfo[rf]["rhapev"],len(hapevent)-1)
+	    #rootfileinfo[rf]["eevoff"]=bisect.bisect_left(eevent,rootfileinfo[rf]["evnum"][0]) event offset
+	    rootfileinfo[rf]["leev"]=numpy.searchsorted(eevent,rootfileinfo[rf]["evnum"]) #sort event
+	    #numpy.where use rootfileinfo if condition else len(eevent)
+	    rootfileinfo[rf]["leev"]=numpy.where(rootfileinfo[rf]["leev"]<len(eevent),rootfileinfo[rf]["leev"],len(eevent)-1) 
+	    rootfileinfo[rf]["lhapev"]=numpy.searchsorted(hapevent,rootfileinfo[rf]["evnum"]) #sort event
+	    rootfileinfo[rf]["lhapev"]=numpy.where(rootfileinfo[rf]["lhapev"]<len(hapevent),rootfileinfo[rf]["lhapev"],len(hapevent)-1) #use rootfileinfo if condition else len(hapevent)
+	    for k in additionalkeys:
+		if len(additional[k])<5:#for the additional info that dodn't aligned with beam event
+		    rootfileinfo[rf]["ev"+k]=numpy.searchsorted(additional[k][1],rootfileinfo[rf]["evnum"])
+		    rootfileinfo[rf]["ev"+k]=numpy.where(rootfileinfo[rf]["ev"+k]<len(additional[k][1]),rootfileinfo[rf]["ev"+k],len(additional[k][1])-1)
     #check raster on/off
-    Iraster=[info.getsqlinfo(run,s) for s in ["FastRasterIx","FastRasterIy","SlowRasterIx","SlowRasterIy"]] 
+    Iraster=[info.getsqlinfo(run,s) for s in ["FastRasterIx","FastRasterIy","SlowRasterIx","SlowRasterIy"]]
     Iraster=[False if i==None or i==0 else True for i in Iraster]
     Iraster=[any(Iraster[:2]),any(Iraster[2:])]
     #raster const
     if any(Iraster):
 	rasterconst=para["rasterconst"]
-	rasterslope,rasterped=[{},{},{},{}],[{},{},{},{}]
+	rasterslope=[{},{},{},{}]
 	if rasterconst:
 	    rasterconst["tgtz"]=[int(z) for z in rasterconst["tgtz"]]
 	    for i in range(len(rasterconst["tgtz"])):
@@ -172,52 +220,70 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
 		rasterslope[1][z]=rasterconst["fstyslope"][i]
 		rasterslope[2][z]=rasterconst["slxslope"][i]
 		rasterslope[3][z]=rasterconst["slyslope"][i]
-		rasterped[0][z]=rasterconst["fstxped"][i]
-		rasterped[1][z]=rasterconst["fstyped"][i]
-		rasterped[2][z]=rasterconst["slxped"][i]
-		rasterped[3][z]=rasterconst["slyped"][i]
+	    #additional z
+	    for z in tgtz:
+		if not z in rasterconst["tgtz"]:
+		    rasterconst["tgtz"].append(z)
+		    for i in range(4):
+			rasterslope[i][z]=rasterslope[i][rasterconst["tgtz"][0]]
 	else:
 	    Iraster=[False,False]
     else:rasterconst=False
     #load pickle file
-    bpmavail=pickle.load(open(pp.getpath("raw","bpmavail",run),"rb"))
-    curr=pickle.load(open(pp.getpath("raw","curr",run),"rb"))
-    if rasterconst:
-	rasterraw=pickle.load(open(pp.getpath("raw","raster",run),"rb"))
-	rastercenter=[(r.max()+r.min())/2. for r in rasterraw]
-    tgtpos={}
-    for z in tgtz:
-	tgtpos[z]=pickle.load(open(pp.getpath("pos","tgt%i"%z,run),"rb"))
+    if constavail:
+	bpmavail=zload(pp.getpath("raw","bpmavail",run))
+	curr=zload(pp.getpath("raw","curr",run))
+	if rasterconst:
+	    rasterraw=zload(pp.getpath("raw","raster",run))
+	    rastercenter=[(r.max()+r.min())/2. for r in rasterraw]
+	tgtpos={}
+	for z in tgtz:
+	    tgtpos[z]=zload(pp.getpath("pos","tgt%i"%z,run))
     #get pos for each rootfile
     print "get positions for each event for rootfile"
     for rf in rootfileinfo.keys():
 	if rootfileinfo[rf]["avail"]:
-	    rootfileinfo[rf]["curr"]=curr[rootfileinfo[rf]["lhapev"]]
-	    rootfileinfo[rf]["bpmavail"]=bpmavail[rootfileinfo[rf]["lhapev"]]
+	    if constavail:
+		rootfileinfo[rf]["curr"]=curr[rootfileinfo[rf]["lhapev"]].astype(numpy.float32)
+		rootfileinfo[rf]["bpmavail"]=bpmavail[rootfileinfo[rf]["lhapev"]].astype(numpy.int32)
+	    else:
+		rootfileinfo[rf]["curr"]=numpy.zeros(len(rootfileinfo[rf]["evnum"]),dtype=numpy.float32)+current
+		rootfileinfo[rf]["bpmavail"]=numpy.zeros(len(rootfileinfo[rf]["evnum"]),dtype=numpy.int32)
 	    for z in tgtz:
-		rootfileinfo[rf][z]=[0,0,0,0]
-		rootfileinfo[rf][z][0]=tgtpos[z][0][rootfileinfo[rf]["lhapev"]]
-		rootfileinfo[rf][z][1]=tgtpos[z][1][rootfileinfo[rf]["lhapev"]]
-		rootfileinfo[rf][z][2]=tgtpos[z][3][rootfileinfo[rf]["lhapev"]]
-		rootfileinfo[rf][z][3]=tgtpos[z][4][rootfileinfo[rf]["lhapev"]]
-		if Iraster[0] and z in rasterconst["tgtz"]:
-		    #for fast raster, x and y need to exchange
-		    rootfileinfo[rf][z][0]=rootfileinfo[rf][z][0]+\
-			(rasterraw[1][rootfileinfo[rf]["eevoff"]:rootfileinfo[rf]["eevoff"]+rootfileinfo[rf]["events"]]\
-			    -rastercenter[1])*rasterslope[0][z]
-		    rootfileinfo[rf][z][1]=rootfileinfo[rf][z][1]+\
-			(rasterraw[0][rootfileinfo[rf]["eevoff"]:rootfileinfo[rf]["eevoff"]+rootfileinfo[rf]["events"]]\
-			    -rastercenter[0])*rasterslope[1][z]
-		if Iraster[1] and z in rasterconst["tgtz"]:
-		    #for slow raster, x and y need to exchange
-		    rootfileinfo[rf][z][0]=rootfileinfo[rf][z][0]+\
-			(rasterraw[3][rootfileinfo[rf]["eevoff"]:rootfileinfo[rf]["eevoff"]+rootfileinfo[rf]["events"]]\
-			    -rastercenter[3])*rasterslope[2][z]
-		    rootfileinfo[rf][z][1]=rootfileinfo[rf][z][1]+\
-			(rasterraw[2][rootfileinfo[rf]["eevoff"]:rootfileinfo[rf]["eevoff"]+rootfileinfo[rf]["events"]]\
-			    -rastercenter[2])*rasterslope[3][z]
-	    del rootfileinfo[rf]["lhapev"]#,rootfileinfo[rf]["rhapev"]
-    del curr,bpmavail,tgtpos
+		rootfileinfo[rf][z]=[0,0,0,0,0,0]
+		if constavail:
+		    rootfileinfo[rf][z][0]=tgtpos[z][0][rootfileinfo[rf]["lhapev"]]
+		    rootfileinfo[rf][z][1]=tgtpos[z][1][rootfileinfo[rf]["lhapev"]]
+		    rootfileinfo[rf][z][2]=tgtpos[z][3][rootfileinfo[rf]["lhapev"]]
+		    rootfileinfo[rf][z][3]=tgtpos[z][4][rootfileinfo[rf]["lhapev"]]
+		    #for 2Hz pos
+		    rootfileinfo[rf][z][4]=rootfileinfo[rf][z][0]
+		    rootfileinfo[rf][z][5]=rootfileinfo[rf][z][1]
+		    if Iraster[0] and z in rasterconst["tgtz"]:
+			#for fast raster, x and y need to exchange
+			rootfileinfo[rf][z][0]=rootfileinfo[rf][z][0]+(rasterraw[1][rootfileinfo[rf]["leev"]]-rastercenter[1])*rasterslope[0][z]
+			rootfileinfo[rf][z][1]=rootfileinfo[rf][z][1]+(rasterraw[0][rootfileinfo[rf]["leev"]]-rastercenter[0])*rasterslope[1][z]
+		    if Iraster[1] and z in rasterconst["tgtz"]:
+			#for slow raster, x and y need to exchange
+			rootfileinfo[rf][z][0]=rootfileinfo[rf][z][0]+(rasterraw[3][rootfileinfo[rf]["leev"]]-rastercenter[3])*rasterslope[2][z]
+			rootfileinfo[rf][z][1]=rootfileinfo[rf][z][1]+(rasterraw[2][rootfileinfo[rf]["leev"]]-rastercenter[2])*rasterslope[3][z]
+		    for i in range(6):
+			rootfileinfo[rf][z][i]=rootfileinfo[rf][z][i].astype(numpy.float32)
+		else:
+		    for i in range(6):
+			rootfileinfo[rf][z][i]=numpy.zeros(len(rootfileinfo[rf]["evnum"]),dtype=numpy.float32)
+		    rootfileinfo[rf][z][1]+=targetoffset
+		    rootfileinfo[rf][z][5]+=targetoffset
+	    for k in additionalkeys:
+		if len(additional[k])<5:
+		    #rootfileinfo[rf][k]=additional[k][rootfileinfo[rf]["eevoff"]:rootfileinfo[rf]["eevoff"]+rootfileinfo[rf]["events"]]
+		    rootfileinfo[rf][k]=additional[k][0][rootfileinfo[rf]["ev"+k]]
+		else:
+		    rootfileinfo[rf][k]=additional[k][rootfileinfo[rf]["leev"]]
+		rootfileinfo[rf][k]=rootfileinfo[rf][k].astype(numpy.float32)
+	    if constavail:del rootfileinfo[rf]["lhapev"],rootfileinfo[rf]["leev"]
+    del additional
+    if constavail:del curr,bpmavail,tgtpos
     if rasterconst:del rasterraw
     gc.collect()
     #tgt leaves
@@ -227,21 +293,37 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
 	ltgt[z]=[]
 	for x in ["x","y","theta","phi"]:
 	    ltgt[z].append(arm+"rb.tgt_%s_%s"%(key,x))
+	#for 2Hz pos
+	for x in ["x","y"]:
+	    ltgt[z].append(arm+"rb.tgtave_%s_%s"%(key,x))
     #insert
     for rf in rootfileinfo.keys():
 	if rootfileinfo[rf]["avail"]:
-	    rootfile=ROOT.TFile(runpath,"UPDATE")
+	    rootfile=ROOT.TFile(rf,"UPDATE")
 	    tree=rootfile.Get(treename)
+	    #remove old branch
+	    print "remove old branch"
+	    removebranch(tree,arm+"rb.bpmavail")
+	    removebranch(tree,arm+"rb.curr")
+	    for z in tgtz:
+		for x in range(6):#for 2Hz pos
+		    removebranch(tree,ltgt[z][x])
+	    for k in additionalkeys:
+		removebranch(tree,k)
 	    #branch
 	    Vdata=[array("i",[0]),array("f",[0])]
 	    branch=[tree.Branch(arm+"rb.bpmavail",Vdata[0],arm+"rb.bpmavail/I"),\
 		tree.Branch(arm+"rb.curr",Vdata[1],arm+"rb.curr/F")]
 	    nbranch=2
 	    for z in tgtz:
-		for x in range(4):
+		for x in range(6):#for 2Hz pos
 		    nbranch+=1
 		    Vdata.append(array("f",[0]))
 		    branch.append(tree.Branch(ltgt[z][x],Vdata[nbranch-1],ltgt[z][x]+"/F"))
+	    for k in additionalkeys:
+		nbranch+=1
+		Vdata.append(array("d",[0]))
+		branch.append(tree.Branch(k,Vdata[nbranch-1],k+"/D"))
 	    print "inserting bpm info to file %s"%rf
 	    tt1=time.time()
 	    for e in range(rootfileinfo[rf]["events"]):
@@ -250,23 +332,29 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
 		Vdata[1][0]=rootfileinfo[rf]["curr"][e]
 		vd=1
 		for z in tgtz:
-		    for x in range(4):
+		    for x in range(6):#for 2Hz pos
 			vd+=1
 			Vdata[vd][0]=rootfileinfo[rf][z][x][e]
+		for k in additionalkeys:
+		    vd+=1
+		    Vdata[vd][0]=rootfileinfo[rf][k][e]
 		for i in range(nbranch):
 		    branch[i].Fill()
 	    tree.Write("",ROOT.TObject.kOverwrite)
 	    tt2=time.time()
+	    print "done for inserting file %s"%rf
 	    print "use time:",tt2-tt1
-	    rootfile.Close()		
-		
-def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode=0,forcefastbus=False):
+	    rootfile.Close()	
+	    del tree,branch
+	
+#calculate the positions at bpms and target
+def getposfromraw(para,runpath,treename="T",firstevent=-1,lastevent=-1,forceredecode=0,forcefastbus=False):
     ##get run info
     calconst={}
     run,pedestal,bpmoffset,tgtz,runorbit,calconst,fitorder,posmapfun=\
 	para["run"],para["ped"],para["offset"],para["tgtz"],para["orbit"],para["calconst"],para["fitorder"],para["posmapfun"]
     if not calconst["a"]:
-	print "sorry no constant found for BPM,please check"
+	print "Error!!! sorry no constant found for BPM,please check"
 	return False
     period=runinfo()
     rootfilepath,runfilename=os.path.split(runpath)
@@ -306,13 +394,13 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
     bpmposexists=False
     d=decode(runpath,treename,firstevent,lastevent,forceredecode,0,forcefastbus)
     d.autodecode()
-    hapevent=pickle.load(open(pp.getpath(rawprefix,"hapevent",run),"rb"))
+    hapevent=zload(pp.getpath(rawprefix,"hapevent",run))
     rawdataentries=len(hapevent)
     #del hapevent
     #gc.collect() #recycle memory
     #check if events same as raw
     if os.path.exists(pp.getpath(posprefix,pklpathn_bpm[0],run)) and not forceredecode:
-	data_bpm=pickle.load(open(pp.getpath(posprefix,pklpathn_bpm[0],run),"rb"))
+	data_bpm=zload(pp.getpath(posprefix,pklpathn_bpm[0],run))
 	if len(data_bpm[0])==rawdataentries:
 	    bpmposexists=True
 	del data_bpm
@@ -323,7 +411,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	bpminfo={"a":bpmpos(run,"a"),"b":bpmpos(run,"b")}
 	for c in ["s","f","ss"]:
 	    #get pure raw data
-	    rawbpm=pickle.load(open(pp.getpath(rawprefix,"%sbpm"%c,run),"rb"))
+	    rawbpm=zload(pp.getpath(rawprefix,"%sbpm"%c,run))
 	    for i in range(8):rawbpm[i]=rawbpm[i]-pedestal[i]-bpmoffset[i]
 	    for a in ["a","b"]:
 		ab=0 if a=="a" else 4
@@ -331,7 +419,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 		tt1=time.time()
 		print "getting bpm %s position in bpm coordinate with %s filter"%(a,c)
 		posbpm_bpm=getrealpos(rawbpm[ab:ab+4],calconst[a],fitorder[a])
-		try:pickle.dump(posbpm_bpm,open(pp.getpath(posprefix,"%sbpm%sbpm"%(c,a),run,1),"wb",-1),-1)
+		try:zdump(posbpm_bpm,pp.getpath(posprefix,"%sbpm%sbpm"%(c,a),run,1))
 		except:sys.exit("Error!failed to dump,do you have write permission in dir %s?"%rootfilepath)
 		tt2=time.time()
 		print tt2-tt1,"secs used"
@@ -339,7 +427,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 		if c!="ss":
 		    print "getting bpm %s position in rot coordinate with %s filter"%(a,c)
 		    posbpm_rot=bpminfo[a].posbpmrotate(posbpm_bpm)
-		    try:pickle.dump(posbpm_rot,open(pp.getpath(posprefix,"%sbpm%srot"%(c,a),run,1),"wb",-1),-1)
+		    try:zdump(posbpm_rot,pp.getpath(posprefix,"%sbpm%srot"%(c,a),run,1))
 		    except:sys.exit("Error!failed to dump,do you have write permission in dir %s?"%rootfilepath)
 		    tt3=time.time()
 		    print tt3-tt2,"secs used"
@@ -348,7 +436,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 		if c!="ss":
 		    print "getting bpm %s position in hall coordinate with %s filter"%(a,c)
 		    posbpm_hall=bpminfo[a].posbpmrot2hall(posbpm_rot)
-		    try:pickle.dump(posbpm_hall,open(pp.getpath(posprefix,"%sbpm%shall"%(c,a),run,1),"wb",-1),-1)
+		    try:zdump(posbpm_hall,pp.getpath(posprefix,"%sbpm%shall"%(c,a),run,1))
 		    except:sys.exit("Error!failed to dump,do you have write permission in dir %s?"%rootfilepath)
 		    del posbpm_hall
 		    tt4=time.time()
@@ -359,26 +447,26 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	if fastbus:
 	    print "calculating fastbus bpm position"
 	    tt1=time.time()
-	    fbrawbpm=pickle.load(open(pp.getpath(rawprefix,"fbbpm",run),"rb"))
+	    fbrawbpm=zload(pp.getpath(rawprefix,"fbbpm",run))
 	    for i in range(8):fbrawbpm[i]=fbrawbpm[i]-pedestal[i]-bpmoffset[i]
 	    for a in ["a","b"]:
 		ab=0 if a=="a" else 4
-		posbpm_bpm=getrealpos(fbrawbpm[ab:ab+4],calconst[a],fitorder[a])
+		fbposbpm_bpm=getrealpos(fbrawbpm[ab:ab+4],calconst[a],fitorder[a])
 		fbposbpm_rot=bpminfo[a].posbpmrotate(fbposbpm_bpm)
 		try:
-		    pickle.dump(fbposbpm_bpm,open(pp.getpath(posprefix,"fbbpm%sbpm"%a,run,1),"wb",-1),-1)
-		    pickle.dump(fbposbpm_rot,open(pp.getpath(posprefix,"fbbpm%srot"%a,run,1),"wb",-1),-1)
-		except:sys.exit("Error!failed to dump,do you have write permission in dir %s?"%rootfilepath)
+		    zdump(fbposbpm_bpm,pp.getpath(posprefix,"fbbpm%sbpm"%a,run,1))
+		    zdump(fbposbpm_rot,pp.getpath(posprefix,"fbbpm%srot"%a,run,1))
+		except:raise Exception("Error!failed to dump,do you have write permission in dir %s?"%rootfilepath)
 	    del fbrawbpm,fbposbpm_bpm,fbposbpm_rot
 	    tt2=time.time()
 	    print tt2-tt1,"secs used"
     #split beam move
     skipcal=False
     if os.path.exists(pp.getpath(posprefix,pklpathn_rms,run)) and not forceredecode:
-	rms_pure=pickle.load(open(pp.getpath(posprefix,pklpathn_rms,run),"rb"))
+	rms_pure=zload(pp.getpath(posprefix,pklpathn_rms,run))
 	if len(rms_pure)==rawdataentries and os.path.exists(pp.getpath(posprefix,pklpathn_split,run)):
 	    skipcal=True
-	    beamsplit=pickle.load(open(pp.getpath(posprefix,pklpathn_split,run),"rb"))
+	    beamsplit=zload(pp.getpath(posprefix,pklpathn_split,run))
 	del rms_pure
 	gc.collect()
     if not skipcal:
@@ -386,8 +474,8 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	print "getting beam sharp move info for run %i........."%run
 	tt10=time.time()
 	aveevents,aveeventsbg=1000,300
-	sbpmabpm=pickle.load(open(pp.getpath(posprefix,"sbpmabpm",run),"rb"))
-	bpmavail=pickle.load(open(pp.getpath(rawprefix,"bpmavail",run),"rb"))
+	sbpmabpm=zload(pp.getpath(posprefix,"sbpmabpm",run))
+	bpmavail=zload(pp.getpath(rawprefix,"bpmavail",run))
 	
 	rawevents=len(sbpmabpm[0])
 	rms_pure=numpy.zeros(rawevents,dtype=numpy.float32)
@@ -403,7 +491,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	    rmsbg1,rmsbg2=Vbpmavebg.rms(0),Vbpmavebg.rms(1)
 	    rms_pure[i]=abs(rms1-rmsbg1)+abs(rms2-rmsbg2)
 	del sbpmabpm,bpmavail,Vbpmave,Vbpmavebg
-	try:pickle.dump(rms_pure,open(pp.getpath(posprefix,pklpathn_rms,run,1),"wb",-1),-1)
+	try:zdump(rms_pure,pp.getpath(posprefix,pklpathn_rms,run,1))
 	except:sys.exit("\n\n\n\nError!failed to dump,do you have write permission in dir %s?"%rootfilepath)
 	gc.collect() #recycle memory
 	moveentries=getposrms(rms_pure)
@@ -411,18 +499,18 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	#gc.collect() #recycle memory
 	#totposmove
 	print "getting beam slow move info for run %i........."%run
-	ssbpmabpm=pickle.load(open(pp.getpath(posprefix,"ssbpmabpm",run),"rb"))
+	ssbpmabpm=zload(pp.getpath(posprefix,"ssbpmabpm",run))
 	totpos=numpy.sqrt(ssbpmabpm[0]**2+ssbpmabpm[1]**2)
 	moveentries=getposslowmove(totpos,moveentries)
 	del ssbpmabpm,totpos
 	gc.collect() #recycle memory
 	#get corresponded events
-	#hapevent=pickle.load(open(pklpath_raw["hapevent"],"rb"))
+	#hapevent=zload(pklpath_raw["hapevent"])
 	moveevents=[map(lambda x:hapevent[x],e) for e in moveentries]
 	#del hapevent
 	#gc.collect() #recycle memory
 	beamsplit={"splitevents":moveevents,"splitentries":moveentries}
-	pickle.dump(beamsplit,open(pp.getpath(posprefix,pklpathn_split,run,1),"wb",-1))
+	zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
 	tt11=time.time()
 	print tt11-tt10,"secs used"
     ##get position at target
@@ -433,7 +521,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	intz=int(z)
 	fn="tgt%i"%(intz)
 	if os.path.exists(pp.getpath(posprefix,fn,run)) and not forceredecode:
-	    data_tgt=pickle.load(open(pp.getpath(posprefix,fn,run),"rb"))
+	    data_tgt=zload(pp.getpath(posprefix,fn,run))
 	    lendata=len(data_tgt[0])
 	    del data_tgt
 	    #gc.collect() #recycle memory
@@ -451,15 +539,15 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	    intz.append(int(z))
 	    tgtfn.append("tgt%i"%(intz[-1]))
 	if runorbit<=0:
-	    sbpmahall=pickle.load(open(pp.getpath(posprefix,"sbpmahall",run),"rb"))
-	    sbpmbhall=pickle.load(open(pp.getpath(posprefix,"sbpmbhall",run),"rb"))
+	    sbpmahall=zload(pp.getpath(posprefix,"sbpmahall",run))
+	    sbpmbhall=zload(pp.getpath(posprefix,"sbpmbhall",run))
 	    p=tgtpos_straight(sbpmahall,sbpmbhall,notinsertedz)
 	    for z in intz:tgtpos[z]=p[z]
 	    del sbpmahall,sbpmbhall,p
 	    #gc.collect() #recycle memory
 	else:
-	    sbpmarot=pickle.load(open(pp.getpath(posprefix,"sbpmarot",run),"rb"))
-	    sbpmbrot=pickle.load(open(pp.getpath(posprefix,"sbpmbrot",run),"rb"))
+	    sbpmarot=zload(pp.getpath(posprefix,"sbpmarot",run))
+	    sbpmbrot=zload(pp.getpath(posprefix,"sbpmbrot",run))
 	    p=tgtpos_field(sbpmarot,sbpmbrot,notinsertedz,posmapfun)
 	    for z in intz:tgtpos[z]=p[z]
 	    del sbpmarot,sbpmbrot,p
@@ -467,7 +555,7 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 	#dump target position data
 	try:
 	    for i in range(lennotz):
-		pickle.dump(tgtpos[intz[i]],open(pp.getpath(posprefix,tgtfn[i],run,1),"wb",-1),-1)
+		zdump(tgtpos[intz[i]],pp.getpath(posprefix,tgtfn[i],run,1))
 	except:sys.exit("\n\n\n\nError!failed to dump,do you have write permission in dir %s?"%rootfilepath)
 	tt9=time.time()
 	print tt9-tt8,"secs used"
@@ -483,12 +571,13 @@ def getposfromraw(para,runpath,treename,firstevent=-1,lastevent=-1,forceredecode
 		for k in range(5):
 		    avepos[k]=numpy.mean(tgtpos[intz][k][entryrange[0]:entryrange[1]])
 		beamsplit[fn].append(avepos)
-	pickle.dump(beamsplit,open(pp.getpath(posprefix,pklpathn_split,run,1),"wb",-1))
+	zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
 	tt10=time.time()
 	print tt10-tt9,"secs used"
 	del tgtpos
 	gc.collect() #recycle memory
 
+#get the target position from two bpms with straight through setting
 def tgtpos_straight(bpma,bpmb,tgtz):
     #calculated by using bpm hall coordinate position
     ab=map(lambda a,b:b-a,bpma,bpmb)
@@ -512,6 +601,7 @@ def tgtpos_straight(bpma,bpmb,tgtz):
 	#pos_err[intz].append(phi_err)
     return pos
 
+#get the target position from two bpms with target field setting
 def tgtpos_field(bpma,bpmb,tgtz,posmapfun):
     #calculated by using bpm rot coordinate position
     #posmapfun:map_x,map_y,map_theta,map_phi,FourFloat
@@ -521,28 +611,26 @@ def tgtpos_field(bpma,bpmb,tgtz,posmapfun):
 	pos={}
 	x=posmapfun[4](bpma[0],bpma[1],bpmb[0],bpmb[1])
 	#dx=posmapfun[4](bpma_err[0],bpma_err[1],bpmb_err[0],bpmb_err[1])
-	dx=posmapfun[4](0,0,0,0)
-	dxsave=dx
 	for z in tgtz:
 	    intz=int(z)
 	    #pos_err[intz]=[]
 	    ###x###
+	    dx=posmapfun[4](0,0,0,0)
 	    tgtx=numpy.float32(posmapfun[0][intz](x,dx,4))
 	    #pos_err[intz].append(dx[0])
-	    dx=dxsave
 	    ###y###
+	    dx=posmapfun[4](0,0,0,0)
 	    tgty=numpy.float32(posmapfun[1][intz](x,dx,4))
 	    #pos_err[intz].append(dx[0])
-	    dx=dxsave
 	    ###theta###
+	    dx=posmapfun[4](0,0,0,0)
 	    tgttheta=numpy.float32(posmapfun[2][intz](x,dx,4))
 	    #pos_err[intz].append(dx[0])
-	    dx=dxsave
 	    ###phi###
+	    dx=posmapfun[4](0,0,0,0)
 	    tgtphi=numpy.float32(posmapfun[3][intz](x,dx,4))
 	    pos[intz]=[tgtx,tgty,z,tgttheta,tgtphi] if isinstance(tgtx,numpy.float32) else [tgtx,tgty,numpy.asarray([z]*len(theta),dtype=numpy.float32),tgttheta,tgtphi]
 	    #pos_err[intz].append(dx[0])
-	    dx=dxsave
     else:
 	lendata=len(bpma[0])
 	tgtz=[int(z) for z in tgtz]
@@ -550,14 +638,17 @@ def tgtpos_field(bpma,bpmb,tgtz,posmapfun):
 	posz=numpy.asarray([z]*lendata,dtype=numpy.float32)
 	for z in tgtz:
 	    pos[z]= [numpy.zeros(lendata,dtype=np.float32), numpy.zeros(lendata,dtype=np.float32), posz, numpy.zeros(lendata,dtype=np.float32), numpy.zeros(lendata,dtype=np.float32)]
-	dx=posmapfun[4](0,0,0,0)
 	for i in range(lendata):
 	    if i%10000==0:print "calculating position at target %i/%i"%(i,lendata)
 	    x=posmapfun[4](bpma[0][i],bpma[1][i],bpmb[0][i],bpmb[1][i])
 	    for z in tgtz:
+		dx=posmapfun[4](0,0,0,0)
 		pos[z][0][i]=posmapfun[0][z](x,dx,4)
+		dx=posmapfun[4](0,0,0,0)
 		pos[z][1][i]=posmapfun[1][z](x,dx,4)
+		dx=posmapfun[4](0,0,0,0)
 		pos[z][3][i]=posmapfun[2][z](x,dx,4)
+		dx=posmapfun[4](0,0,0,0)
 		pos[z][4][i]=posmapfun[3][z](x,dx,4)
     return pos
 

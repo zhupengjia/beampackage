@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-import re,urllib,os,glob,sys,numpy
+import re,urllib,os,glob,sys,numpy,zlib
 from odsread import odsread
 try:import cPickle as pickle
 except:import pickle
 try:import sqlite3
 except:
     try:from pysqlite2 import dbapi2 as sqlite3
-    except:pass
-
+    except:
+	raise Exception("Sorry no sqlite3 module found")
+	
 #find runinfo for run
 class runinfo(odsread):
     def __init__(self,periodfile="period.ods",sqlfile="g2p.db",pkgfile="beampackage.conf",\
@@ -54,7 +55,7 @@ class runinfo(odsread):
 	self.pklfile[key]=checkdb(self.pklfile[key])
 	if not self.pklfile[key]:self.pklavail[key]=False
 	else:
-	    self.pklinfo[key]=pickle.load(open(self.pklfile[key],"rb"))
+	    self.pklinfo[key]=zload(self.pklfile[key])
 	    self.pklavail[key]=True
 	self.initpkl[key]=True
     #init bpm constant read
@@ -71,6 +72,7 @@ class runinfo(odsread):
     def __initpkg(self):
 	if self.initpkg:return
 	self.pkgfile=checkdb(self.pkgfile)
+	self.tgtz=[]
 	if not self.pkgfile:self.pkgavail=False
 	else:
 	    datfile=open(self.pkgfile,"r")
@@ -100,6 +102,20 @@ class runinfo(odsread):
 		elif line[0]=="filter1type":self.filter1type=line[1].strip()
 		elif line[0]=="filter2type":self.filter2type=line[1].strip()
 		elif line[0]=="filter3type":self.filter3type=line[1].strip()
+		elif "target" in line[0]:
+		    #target z
+		    splitline0=re.split("[\s;]",line[0])
+		    tgttype=splitline0[1].lower()
+		    if len(splitline0)>2:
+			tgtrange=[]
+			for rg in re.split(",",splitline0[2]):
+			    rg=[int(x) for x in re.split("[-~]",rg)]
+			    tgtrange+=range(rg[0],rg[1]+1)
+			tgtrange=numpy.asarray(tgtrange,numpy.int32)
+		    else:
+			tgtrange=xrange(60000)
+		    tgtz=[float(x) for x in re.split(",",line[1])]
+		    self.tgtz.append((tgttype,tgtrange,tgtz))
 	    self.pkgavail=True
 	self.initpkg=True
 	
@@ -196,7 +212,7 @@ class runinfo(odsread):
 	return o
 	    
     #get run range for this orbit
-    def runrange(self,run):
+    def getrunrange(self,run):
 	self.__initperiod()
 	if not self.__samerun(run):self.__findrun(run)
 	return self.runrange
@@ -256,6 +272,20 @@ class runinfo(odsread):
 	    if self.pklavail["curr"] and self.pklinfo["curr"].has_key(run):
 		c=self.pklinfo["curr"][run]
 	return c
+    #get target type
+    def targettype(self,run):
+	try:return self.getsqlinfo(run,"TargetType").lower()
+	except:return None
+    #get target z for target type
+    def gettgtz(self,run):
+	self.__initpkg()
+	tgttype=self.targettype(run)
+	tgtz=[0]
+	for z in self.tgtz:
+	    if tgttype==z[0] and run in z[1]:
+		tgtz=z[2]
+		break
+	return tgtz
     #check if happex avail for run, from pkgfile
     def ifhapavail(self,run):
 	self.__initpkg()
@@ -314,18 +344,22 @@ class runinfo(odsread):
 	    return getclosedped(1)
 	elif g2 in kg2:
 	    return getclosedped(2)
-	sys.exit()
+	return False
     
     #get pedestal from sqlite
-    def pedestal(self,run,fastbus=False):
+    def pedestal(self,run,fastbus=False,nsuf="bpmped"):
 	if self.ifautogain(run):return {"a":False,"b":False}
 	suffix="fb" if fastbus else "hap"
-	ped=[self.getsqlinfo(run,("bpmped_%s%i"%(suffix,i+1))) for i in range(8)]
+	ped=[self.getsqlinfo(run,("%s_%s%i"%(nsuf,suffix,i+1))) for i in range(8)]
 	if not any(a==None for a in ped[:4]):peda=ped[:4]
 	else:peda=False
 	if not any(a==None for a in ped[4:]):pedb=ped[4:]
 	else:pedb=False
 	return {"a":peda,"b":pedb}
+    
+    #get pedestal rms from sqlite
+    def pedestalrms(self,run,fastbus=False):
+	return self.pedestal(run,fastbus,"bpmpedrms")
     
     #get bpm setting like diff,div,gain,...
     def getbpmsetting(self,run):
@@ -340,16 +374,17 @@ class runinfo(odsread):
     #get the most close pedestal value for run from pedestal.pdt
     def pedestalfrompkl(self,run,fastbus=False,silent=False):
 	if self.ifautogain(run):
-	    #if fastbus:
-	    return {"a":False,"b":False}
+	    if fastbus:
+		return {"a":False,"b":False}
 	suffix="fb" if fastbus else "hap"
 	pedkey=suffix+"ped"
 	self.__initpkl(pedkey)
 	if not self.pklavail[pedkey]:return {"a":False,"b":False}
 	elif not silent:print "using pedestal file %s"%self.pklfile[pedkey]
 	#getdiv
-	ped=[0]*8
+	ped,pederr=[0]*8,[None]*8
 	arm=self.__whicharm(run)
+	arml="L" if arm=="left" else "R"
 	gain=self.getbpmsetting(run)
 	for i in range(8):
 	    ab="a" if i<4 else "b"
@@ -361,8 +396,10 @@ class runinfo(odsread):
 		ped[i]=None
 		continue
 	    if self.ifautogain(run) and not fastbus:
-		ped[i]=self.getpedgain("L",div,g1,g2)
-		if not silent:print "using %s for run %i chan %i,value %i"%(self.pklfile["noise"],run,i,ped[i])
+		try:
+		    ped[i]=self.getpedgain(arml,div,g1,g2)[i]
+		except:ped[i]=None
+		if not silent and ped[i]!=None:print "using %s for run %i chan %i,value %i"%(self.pklfile["noise"],run,i,ped[i])
 		continue
 	    runs=[]
 	    for key in sorted(self.pklinfo[pedkey].keys()):
@@ -382,12 +419,17 @@ class runinfo(odsread):
 	    runs=numpy.asarray(runs,dtype=numpy.int32)
 	    argmin=numpy.abs(runs-run).argmin()
 	    ped[i]=self.pklinfo[pedkey][runs[argmin]]["peaks"][i]
+	    pederr[i]=self.pklinfo[pedkey][runs[argmin]]["rms"][i]
 	    if not silent:print "using pedestal run %i for run %i chan %i,value %i"%(runs[argmin],run,i,ped[i])
 	if not any(a==None for a in ped[:4]):peda=ped[:4]
 	else:peda=False
 	if not any(a==None for a in ped[4:]):pedb=ped[4:]
 	else:pedb=False
-	return {"a":peda,"b":pedb}
+	if not any(a==None for a in pederr[:4]):pedaerr=pederr[:4]
+	else:pedaerr=False
+	if not any(a==None for a in pederr[4:]):pedberr=pederr[4:]
+	else:pedberr=False
+	return {"a":peda,"b":pedb,"aerr":pedaerr,"berr":pedberr}
     
     #read const from file,filename is file path,ab="a" or "b"
     def bpmconstreadfromfile(self,filename,ab,dbread=False):
@@ -400,12 +442,12 @@ class runinfo(odsread):
 	for line in datfile:
 	    if line[0]=="#":continue
 	    reline=re.split("[:\n]",line)
-	    data=re.split(" ",reline[1].strip())
+	    data=re.split("[\s,]",reline[1].strip())
 	    if "keywords" in reline[0] and not dbread["keywords"]:
 		dbread["keywords"]=data
 	    elif "run period" in reline[0] and not dbread["period"]:
 		#runperiod=[int(x) for x in data]
-		runperiods=re.split(",",reline[1].strip())
+		runperiods=re.split("[\s,]",reline[1].strip())
 		runperiod=[]
 		for p in runperiods:
 		    if p.isdigit():runperiod.append(int(p))
@@ -429,13 +471,13 @@ class runinfo(odsread):
 		if all(x in reline[0] for x in ["ar","gx","gy"]):rgxy=[float(x) for x in data]
 		elif all(x in reline[0] for x in ["x","a","b","c"]):cx=[float(x) for x in data]
 		elif all(x in reline[0] for x in ["y","a","b","c"]):cy=[float(x) for x in data]
-		elif all(x in reline[0] for x in ["x","para","error"]):cxerr=[float(x) for x in data]
-		elif all(x in reline[0] for x in ["y","para","error"]):cyerr=[float(x) for x in data]
+		elif all(x in reline[0] for x in ["x","err"]):cxerr=[float(x) for x in data]
+		elif all(x in reline[0] for x in ["y","err"]):cyerr=[float(x) for x in data]
 	    if "import" in reline[0]:
 		importfile=os.path.join(os.path.split(filename)[0],re.split(" ",reline[0].strip())[1])
 		break
 	if locals().has_key("cy"):dbread["const"]=[tuple(rgxy),cx,cy,len(cx)]
-	if locals().has_key("cxerr"):
+	if locals().has_key("cyerr"):
 	    dbread["const"].append(cxerr)
 	    dbread["const"].append(cyerr)
 	if importfile:return self.bpmconstreadfromfile(importfile,ab,dbread)
@@ -443,6 +485,7 @@ class runinfo(odsread):
 	    self.fbpmconst[filename]=dbread
 	    return dbread	
     
+    #read bpm constant
     def bpmconstread(self,run,forcefastbus=False,silent=False):
 	if self.bpmconst.has_key(run):return self.bpmconst[run]
 	self.__initconst()
@@ -481,6 +524,28 @@ class runinfo(odsread):
 	const={"a":aconst,"b":bconst}
 	self.bpmconst[run]=const
 	return const
+    
+    #get run number list for special condition
+    def getruns(self,conditions=[],arm=False):
+	self.__initsql()
+	if not arm:arms=["left","right"]
+	elif arm in ["left","L","Left","l"]:arms=["left"]
+	elif arm in ["right","R","Right","r"]:arms=["right"]
+	else:arms=["left","right"]
+	runs=[]
+	for arm in arms:
+	    if isinstance(conditions,str):
+		conditions=[conditions]
+	    if len(conditions)<1:
+		self.cur.execute("select RunNumber from %s"%arm)
+	    else:
+		cmd=conditions[0]
+		if len(conditions)>1:
+		    for c in conditions[1:]:
+			cmd+=" and %s"%c
+		self.cur.execute("select RunNumber from %s where %s"%(arm,cmd))
+	    runs+=[x[0] for x in self.cur.fetchall()]
+	return runs
     
 #get harp peak from harppeaks.ods
 class harpinfo(odsread):
@@ -676,6 +741,45 @@ def sortrun(frun,runs):
     runs=sorted(diffrun,key=lambda r:r[0])
     return [run[1] for run in runs if run[0]<15000]
 	
+def rasterconstreadfromfile(filename,dbread=False):
+    datfile=open(filename,"r")
+    if not isinstance(dbread,dict):
+	dbread={"period":False,"tgtz":False,"clkrate":False,"rebuild":False,"slxslope":False,\
+	    "slyslope":False,"fstxslope":False,"fstyslope":False}
+    importfile=False
+    for line in datfile:
+	reline=re.split("[:\n]",line)
+	data=re.split(" ",reline[1].strip())
+	#print data
+	if "run period" in reline[0] and not dbread["period"]:
+	    runperiods=re.split(",",reline[1].strip())
+	    runperiod=[]
+	    for p in runperiods:
+		if p.isdigit():runperiod.append(int(p))
+		else:
+		    ptmp=[int(x) for x in re.split("[ ~-]",p)]
+		    runperiod+=range(ptmp[0],ptmp[1]+1)
+	    dbread["period"]=runperiod
+	elif "fastclock rate" in reline[0] and not dbread["clkrate"]:
+	    dbread["clkrate"]=float(data[0])
+	elif "function rebuild" in reline[0] and not dbread["rebuild"]:
+	    dbread["rebuild"]=[int(x)>0 for x in data]	
+	elif "target z" in reline[0] and not dbread["tgtz"]:
+	    dbread["tgtz"]=[float(x) for x in data]
+	elif "slow raster x slope" in reline[0] and not dbread["slxslope"]:
+	    dbread["slxslope"]=[float(x) for x in data]
+	elif "slow raster y slope" in reline[0] and not dbread["slyslope"]:
+	    dbread["slyslope"]=[float(x) for x in data]
+	elif "fast raster x slope" in reline[0] and not dbread["fstxslope"]:
+	    dbread["fstxslope"]=[float(x) for x in data]
+	elif "fast raster y slope" in reline[0] and not dbread["fstyslope"]:
+	    dbread["fstyslope"]=[float(x) for x in data]
+	if "import" in reline[0]:
+	    importfile=os.path.join(os.path.split(filename)[0],re.split(" ",reline[0].strip())[1])
+	    break
+    if importfile:return constread(importfile,dbread)
+    else:return dbread	
+	
 def rasterconstread(run):
     dbdir=os.getenv("BEAMDBPATH")
     if dbdir==None:
@@ -688,63 +792,8 @@ def rasterconstread(run):
     for datfile in datfiles:
 	calruns.append(int(re.split("[_.]",os.path.split(datfile)[1])[-2]))
     calruns=sortrun(run,calruns)
-    def constread(filename,dbread=False):
-	datfile=open(filename,"r")
-	if not isinstance(dbread,dict):
-	    dbread={"period":False,"tgtz":False,"clkrate":False,"rebuild":False,"slxslope":False,"slxped":False,"slxcenter":False,\
-		"slyslope":False,"slyped":False,"slycenter":False,"fstxslope":False,"fstxped":False,"fstxcenter":False,\
-		"fstyslope":False,"fstyped":False,"fstycenter":False}
-	importfile=False
-	for line in datfile:
-	    reline=re.split("[:\n]",line)
-	    data=re.split(" ",reline[1].strip())
-	    #print data
-	    if "run period" in reline[0] and not dbread["period"]:
-		runperiods=re.split(",",reline[1].strip())
-		runperiod=[]
-		for p in runperiods:
-		    if p.isdigit():runperiod.append(int(p))
-		    else:
-			ptmp=[int(x) for x in re.split("[ ~-]",p)]
-			runperiod+=range(ptmp[0],ptmp[1]+1)
-		dbread["period"]=runperiod
-	    elif "fastclock rate" in reline[0] and not dbread["clkrate"]:
-		dbread["clkrate"]=float(data[0])
-	    elif "function rebuild" in reline[0] and not dbread["rebuild"]:
-		dbread["rebuild"]=[int(x)>0 for x in data]	
-	    elif "target z" in reline[0] and not dbread["tgtz"]:
-		dbread["tgtz"]=[float(x) for x in data]
-	    elif "slow raster x slope" in reline[0] and not dbread["slxslope"]:
-		dbread["slxslope"]=[float(x) for x in data]
-	    elif "slow raster x ped" in reline[0] and not dbread["slxped"]:
-		dbread["slxped"]=[float(x) for x in data]
-	    elif "slow raster x center" in reline[0] and not dbread["slxcenter"]:
-		dbread["slxcenter"]=float(data[0])
-	    elif "slow raster y slope" in reline[0] and not dbread["slyslope"]:
-		dbread["slyslope"]=[float(x) for x in data]
-	    elif "slow raster y ped" in reline[0] and not dbread["slyped"]:
-		dbread["slyped"]=[float(x) for x in data]
-	    elif "slow raster y center" in reline[0] and not dbread["slycenter"]:
-		dbread["slycenter"]=float(data[0])
-	    elif "fast raster x slope" in reline[0] and not dbread["fstxslope"]:
-		dbread["fstxslope"]=[float(x) for x in data]
-	    elif "fast raster x ped" in reline[0] and not dbread["fstxped"]:
-		dbread["fstxped"]=[float(x) for x in data]
-	    elif "fast raster x center" in reline[0] and not dbread["fstxcenter"]:
-		dbread["fstxcenter"]=float(data[0])
-	    elif "fast raster y slope" in reline[0] and not dbread["fstyslope"]:
-		dbread["fstyslope"]=[float(x) for x in data]
-	    elif "fast raster y ped" in reline[0] and not dbread["fstyped"]:
-		dbread["fstyped"]=[float(x) for x in data]
-	    elif "fast raster y center" in reline[0] and not dbread["fstycenter"]:
-		dbread["fstycenter"]=float(data[0])
-	    if "import" in reline[0]:
-		importfile=os.path.join(os.path.split(filename)[0],re.split(" ",reline[0].strip())[1])
-		break
-	if importfile:return constread(importfile,dbread)
-	else:return dbread
     for calrun in calruns:
-	const=constread(os.path.join(pydb,"raster_%i.dat"%calrun))
+	const=rasterconstreadfromfile(os.path.join(pydb,"raster_%i.dat"%calrun))
 	if run in const["period"]:
 	    del const["period"]
 	    return const
@@ -781,6 +830,20 @@ class getpklpath:
 		if os.path.exists(path2):return path2
 		else:return path
 
+def checkrunavail(path,run,checkorder=["bpm","ring","g2p"]):
+    rootfiles=filter(lambda p:"%i"%run in p,os.listdir(path))
+    filelist=[]
+    for order in checkorder:
+	pattern="%s_?[LR]?_%i.root"%(order,run)
+	t=[]
+	for f in rootfiles:
+	    if re.match(pattern,f):t.append(f)
+	t.sort()
+	filelist+=t
+    if len(filelist)<1:
+	raise Exception("sorry no file found for run %s in %s"%(run,path))
+    return os.path.join(path,filelist[0])
+
 #automatically download database file if not exists
 def checkdb(filename,link="http://hallaweb.jlab.org/experiment/g2p/collaborators/pzhu/wiki/pyDB"):
     if os.path.exists(filename):return filename
@@ -798,4 +861,15 @@ def checkdb(filename,link="http://hallaweb.jlab.org/experiment/g2p/collaborators
 	   # print "sorry can not download %s,please check your network connection"%filename
 	   # return False
     return filename
-	
+
+#compress pickle file by using zlib and cpickle
+def zdump(value,filename):
+    with open(filename,"wb",-1) as fpz:
+	fpz.write(zlib.compress(pickle.dumps(value,-1),9))
+
+#load compressed pkl file from zdump
+def zload(filename):
+    with open(filename,"rb") as fpz:
+	value=fpz.read()
+	try:return pickle.loads(zlib.decompress(value))
+	except:return pickle.loads(value)

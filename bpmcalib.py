@@ -1,27 +1,11 @@
 #!/usr/bin/env python
 import os,re,numpy
-try:import cPickle as pickle
-except:import pickle
 from harppos import *
 from bpmfit import *
 from signalfilter import decode,getrealpos
 from runinfo import *
 
-def checkrunavail(path,run,checkorder=["bpm","ring","g2p"]):
-    rootfiles=filter(lambda p:"%i"%run in p,os.listdir(path))
-    filelist=[]
-    for order in checkorder:
-	pattern="%s_?[LR]?_%i.root"%(order,run)
-	t=[]
-	for f in rootfiles:
-	    if re.match(pattern,f):t.append(f)
-	t.sort()
-	filelist+=t
-    if len(filelist)<1:
-	print "sorry no file found for run %s in %s"%(run,path)
-	return False
-    return os.path.join(path,filelist[0])
-
+#class to calibrate bpm
 class bpmcalib:
     def __init__(self,keywords=False,treename="T",rootpath=os.getenv("REPLAY_OUT_PATH"), onlyb=False,forcefastbus=False,forceredecode=False,ab=False):
 	self.keywords=keywords
@@ -80,11 +64,12 @@ class bpmcalib:
 		pos1.append([numpy.mean(x) for x in bpmaposhall])
 	    else:pos1.append(self.harp.getpos_04(self.peak_04[i]))
 	    pos2.append(self.harp.getpos_05(self.peak_05[i]))
-	    if not self.onlyb:posbpma.append(self.bpm["a"].getpos_bpm(pos1[i],pos2[i]))
-	    posbpmb.append(self.bpm["b"].getpos_bpm(pos1[i],pos2[i]))
-	    #posbpmb.append(self.harp.getpos_05_local(self.peak_05[i]))
-	#posbpma=[[1.12,2.04,0],[4.2,3.91,0],[7.57,-6.66],[-3.07,4.22,0],[-1.31,-1.7,0]]
-	#posbpmb=[[0.17,1.12,0],[2.71,3.67,0],[9.91,-6.14],[-3.76,3.15,0],[-1.81,-3.07,0]]
+	    if not self.onlyb:
+		posbpma.append(self.bpm["a"].getpos_bpm(pos1[i],pos2[i]))
+		posbpmb.append(self.bpm["b"].getpos_bpm(pos1[i],pos2[i]))
+	    else:
+		#print self.bpm["b"].
+		posbpmb.append(self.harp.getpos_05_local(self.peak_05[i]))
 	hardpos=[posbpma,posbpmb]
 	r=map(lambda p:p[0]**2+p[1]**2,posbpmb)
 	self.centerid=r.index(min(r))
@@ -102,13 +87,16 @@ class bpmcalib:
 	    print
 	    
     #get bpm calibration constant, used for calibrating bpm B only with A and harp info
-    def getcalibconst(self,ab):
-	tmp=self.period.bpmconstread(self.run[0],self.forcefastbus)[ab]
-	if not tmp:return False
+    def getcalibconst(self,ab,run=False):
+	if not run:run=self.run[0]
+	tmp=self.period.bpmconstread(run,self.forcefastbus)[ab]
+	if not tmp:
+	    print "can not find const for run %i"%run
+	    return False
 	#pedestal for run, read from pedestal.pkl from database
 	pedtmp=False
-	if not self.period.ifautogain(self.run[0]):
-	    pedtmp=self.period.pedestal(self.run[0],self.forcefastbus)[ab]	
+	if not self.period.ifautogain(run):
+	    pedtmp=self.period.pedestal(run,self.forcefastbus)[ab]	
 	if not pedtmp:pedtmp=tmp["ped"]
 	pedestal=map(lambda a,b:a+b,pedtmp,tmp["offset"])
 	calconst=tmp["const"]
@@ -142,10 +130,10 @@ class bpmcalib:
 	    if not runpath:raise Exception("no file found for run %i"%run)
 	    d=decode(runpath,self.treename,forcefastbus=self.forcefastbus,forceredecode=self.forceredecode)
 	    d.autodecode()
-	raw=pickle.load(open(bpmrawpkl,"rb"))
+	raw=zload(bpmrawpkl)
 	#ped or signal cut
 	if ped:
-	    curr=pickle.load(open(currpkl,"rb"))
+	    curr=zload(currpkl)
 	    #get average curr
 	    nocurr=0.01 #below this current will deal as no signal
 	    currshift=500
@@ -153,7 +141,7 @@ class bpmcalib:
 	    curr1=numpy.concatenate((numpy.zeros(currshift),curr[:-currshift]))
 	    bpmavail=curr*curr1
 	else:
-	    bpmavail=pickle.load(open(availpkl,"rb"))
+	    bpmavail=zload(availpkl)
 	#event cut
 	if not eventcut:
 	    ecut=getbpmeventcut()

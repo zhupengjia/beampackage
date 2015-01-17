@@ -1,12 +1,17 @@
 #!/usr/bin/env python
-import time,linecache,sys,re
+import time,linecache,sys,re,os
 def times2r(t):
-	if t.isdigit():
-            return int(t)
-	else:
-            return int(time.mktime(time.strptime(t,"%Y-%m-%d %H:%M:%S")))
+    os.environ['TZ'] = 'US/Eastern'
+    time.tzset()
+    if t.isdigit():
+	return int(t)
+    else:
+	return int(time.mktime(time.strptime(t,"%Y-%m-%d %H:%M:%S")))
 def timer2s(t):
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
+    os.environ['TZ'] = 'US/Eastern'
+    time.tzset()
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
+
 class epicst2v:
     def __init__(self, filename):
         self.epicsfilen=filename

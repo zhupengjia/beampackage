@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import numpy,math,sys
 from runinfo import runinfo
+#coordinate rotate
 def rotate(pos,angle,anti=0): #angle is yaw(y),pitch(x),roll(z) in optim coordinate
     #anti=0:from original coordinate(hall) to rotated coordinate(local)
     #anti=1:from rotated coordinate(local) to original coordinate(hall)
@@ -17,6 +18,7 @@ def rotate(pos,angle,anti=0): #angle is yaw(y),pitch(x),roll(z) in optim coordin
     if anti==0:return numpy.array((M*a).T)[0].tolist()
     else:return numpy.array((M.I*a).T)[0].tolist()	
 
+#class to calculate position from harp peaks and survey
 class harppos(runinfo):
   def __init__(self,run):
       #run is used for getting survey data
@@ -54,6 +56,7 @@ class harppos(runinfo):
   def getpos_05_local(self,peak):
       return self.__getharppos(peak,self.wirepos_05,self.wiretype_05,self.wirerot_05)
 
+#class to transport position to bpm
 class bpmpos(runinfo):
   def __init__(self,run,ab):
       #ab is "a" for bpm A or "b" for bpm B,run is used for getting survey data

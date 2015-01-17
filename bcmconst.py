@@ -48,10 +48,11 @@ class bcmconst(odsread):
         if len(cols)>0:return cols
         else: return False
 
-    def getconst(self,run,device,updown,clock="fast"):
+    def getconst(self,run,device,updown,clock="fast",quiet=False):
         cols=self.findcol(run,device,updown)
         if not cols:
-            print "can not find constant for run %i,device %s %s, check run number, maybe it is broken during that time"%(run,device,updown)
+	    if not quiet:
+		print "can not find constant for run %i,device %s %s, check run number, maybe it is broken during that time"%(run,device,updown)
             return False
         if device=="happex":clk=""
         else:
@@ -74,7 +75,8 @@ class bcmconst(odsread):
                     consts.append([slope,ped])
     	 	break
         if len(consts)==0:
-            print "bcm constant not exists for run %i,%s %sclock %sstream"%(run,device,clock,updown)
+	    if not quiet:
+		print "bcm constant not exists for run %i,%s %sclock %sstream"%(run,device,clock,updown)
             return False
         slope=0
         ped=0
@@ -98,7 +100,7 @@ def getcurr(rate,const,device,clock="slow"):
 	else:clockrate=1024
 	return const[0]*(rate-const[1]*clockrate)
 
-#count is total count, clockcnt is total clock count(happex is total entry),unit is uA
+#count is total count, clockcnt is total clock count(happex is total entry),unit is uC
 def getcharge(count,clockcnt,const,device,clock="fast"):
     if not const:
 	return numpy.nan
