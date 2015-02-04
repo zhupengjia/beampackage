@@ -1,6 +1,5 @@
-beampackage
-===========
+## Beam Package
 
-beampackage for g2p experiment in Jefferson Lab
+Beam Package for Jefferson Lab experiment E08-027 (g2p).
 
-use this package for bpm calibration and insert
+To use this package for bpm calibration and insert, download the [pyDB](https://www.dropbox.com/l/IPImFW6fLO6242ZfX2ujyr) and place them in the pyDB directory.

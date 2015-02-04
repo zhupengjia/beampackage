@@ -1,0 +1,13 @@
+raster calibration constant database, including size, fastclock
+
+------------------------------------------------
+
+avail run period:5441-5902
+fastclock rate:103920
+#set to 1 if want to rebuild raster function instead of using ADC value directly, first is fast raster,second is slow raster
+function rebuild:0 0
+target z position(mm,dont change it):0
+slow raster x slope:-0.0043334721
+slow raster y slope:-0.0038161117
+fast raster x slope:-0.0011566855
+fast raster y slope:-0.0011226289

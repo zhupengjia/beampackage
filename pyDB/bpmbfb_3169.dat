@@ -1,0 +1,16 @@
+All of the survey info directly come from survey data,please read survey report to get the detail info about the coordinate
+Please contact pengjia immediately if you have any questions(email,gtalk,phone...)
+keywords: 0313 100nA left 
+
+------------------------------------------------
+
+avail run period:3168-3175,3243-3244,3153-3167,3176-3200,3212-3230,3233-3235,3272-3400,3339
+avail curr(nA):50 100
+target z position(mm,support multi):-14.135 0 14.135 -10.81 -13.6271 -12.5476
+pedestal peak:6744.609659 6667.277405 6873.950095 6616.935509
+offset:0.000000 0.000000 0.000000 0.000000
+bpmb ar,gx,gy:34.924999999999997 0.998319072566954 0.964033416586080
+fitorder:1 1
+bpmb x a,b,c:0.005602568046663 1.094638744227223 0.097069169069131
+bpmb y a,b,c:0.052603899679513 1.118444768288963 -0.107929247620662
+fval:0.0243835 0.2301776
