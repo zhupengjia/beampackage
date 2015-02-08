@@ -4,9 +4,9 @@ def times2r(t):
     os.environ['TZ'] = 'US/Eastern'
     time.tzset()
     if t.isdigit():
-	return int(t)
+      return int(t)
     else:
-	return int(time.mktime(time.strptime(t,"%Y-%m-%d %H:%M:%S")))
+      return int(time.mktime(time.strptime(t,"%Y-%m-%d %H:%M:%S")))
 def timer2s(t):
     os.environ['TZ'] = 'US/Eastern'
     time.tzset()
@@ -14,31 +14,31 @@ def timer2s(t):
 
 class epicst2v:
     def __init__(self, filename):
-        self.epicsfilen=filename
-        try:
-#            tt1=time.clock()
-            self.epicsfile=open(self.epicsfilen,"rb")
-            self.totline = 0
-            while True:
-                fbuffer = self.epicsfile.read(8192*1024)
-                if not fbuffer:
-                    break
-                self.totline += fbuffer.count('\n')
-#            self.totline=len(self.epicsfile.readlines())
-#            print self.totline
-#            tt2=time.clock()
-        except Exception as e:
-	    print e
-            raise Exception("file not existed or not available!!")
-	tmptime=linecache.getline(self.epicsfilen,1)[0:10]
-	if tmptime.isdigit():
-	    self.valsplit=10
-	    self.timestart=int(tmptime)
-	else:
-	    self.valsplit=19
-	    self.timestart=times2r(linecache.getline(self.epicsfilen,1)[:self.valsplit])
+      self.epicsfilen=filename
+      try:
+#         tt1=time.clock()
+          self.epicsfile=open(self.epicsfilen,"rb")
+          self.totline = 0
+          while True:
+              fbuffer = self.epicsfile.read(8192*1024)
+              if not fbuffer:
+                  break
+              self.totline += fbuffer.count('\n')
+#          self.totline=len(self.epicsfile.readlines())
+#          print self.totline
+#          tt2=time.clock()
+      except Exception as e:
+          print e
+          raise Exception("file not existed or not available!!")
+      tmptime=linecache.getline(self.epicsfilen,1)[0:10]
+      if tmptime.isdigit():
+          self.valsplit=10
+          self.timestart=int(tmptime)
+      else:
+          self.valsplit=19
+          self.timestart=times2r(linecache.getline(self.epicsfilen,1)[:self.valsplit])
  #       tt3=time.clock()
-        self.timeend=times2r(linecache.getline(self.epicsfilen,self.totline)[:self.valsplit])
+          self.timeend=times2r(linecache.getline(self.epicsfilen,self.totline)[:self.valsplit])
  #       tt4=time.clock()
  #       print "total time:",tt2-tt1,tt3-tt2,tt4-tt3
 
@@ -48,16 +48,16 @@ class epicst2v:
 
     def rawtime2value(self,t):
         t=int(t)
-#	print t,self.timestart,self.timeend
+#      print t,self.timestart,self.timeend
         if t>self.timeend or t<self.timestart:
             print "time out of range, please use range %s to %s"%(self.timestart,self.timeend)
             #sys.exit()
-	    return None
+            return None
         found=0
         line1=1
         line2=int(self.totline/2)
         line3=self.totline
-	time1=times2r(linecache.getline(self.epicsfilen,line2)[:self.valsplit])
+        time1=times2r(linecache.getline(self.epicsfilen,line2)[:self.valsplit])
         while found==0:
             if t>time1:
                 line1=line2
@@ -74,8 +74,8 @@ class epicst2v:
             elif line3-line2<2:
                 found=1
                 continue
-	    time1=times2r(linecache.getline(self.epicsfilen,line2)[:self.valsplit])
-	value=linecache.getline(self.epicsfilen,line2)[self.valsplit+1:].replace("\n", "")
+            time1=times2r(linecache.getline(self.epicsfilen,line2)[:self.valsplit])
+        value=linecache.getline(self.epicsfilen,line2)[self.valsplit+1:].replace("\n", "")
         if value.isdigit():
             return float(value)
         else:

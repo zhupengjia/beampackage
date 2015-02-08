@@ -3,6 +3,6 @@ modules=["odsread","harppos","harppeak","bpmfit","bcmconst","bpmcalib","bpminser
     "rasterrecon","signalfilter","epicst2v","pacupdate","runinfo"]
 for m in modules:
     try:
-	exec("from %s import *"%m)
+      exec("from %s import *"%m)
     except Exception as err:
-	print "Error!!",err
+      print "Error!!",err

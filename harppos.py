@@ -16,7 +16,7 @@ def rotate(pos,angle,anti=0): #angle is yaw(y),pitch(x),roll(z) in optim coordin
     Mroll=numpy.matrix([[cr,sr,0],[-sr,cr,0],[0,0,1]])
     M=Mroll*Mpitch*Myaw
     if anti==0:return numpy.array((M*a).T)[0].tolist()
-    else:return numpy.array((M.I*a).T)[0].tolist()	
+    else:return numpy.array((M.I*a).T)[0].tolist()      
 
 #class to calculate position from harp peaks and survey
 class harppos(runinfo):
@@ -40,8 +40,8 @@ class harppos(runinfo):
 
   def __getharppos(self,peak,wirepos,wiretype,wirerot):
       pos_raw=[wirepos[wiretype[0]]-peak[wiretype[0]],\
-	       ((wirepos[wiretype[1]]-wirepos[wiretype[2]])-(peak[wiretype[1]]-peak[wiretype[2]]))/2.,\
-	       0]
+             ((wirepos[wiretype[1]]-wirepos[wiretype[2]])-(peak[wiretype[1]]-peak[wiretype[2]]))/2.,\
+             0]
       return rotate(pos_raw,wirerot,1)
 
   def getpos_04(self,peak):

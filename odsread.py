@@ -3,7 +3,7 @@ import xml.etree.ElementTree as XET
 
 class odsread:
     def __init__(self,filename):
-	from zipfile import ZipFile
+        from zipfile import ZipFile
         ziparchive = ZipFile(filename, "r")
         self.xmldata = ziparchive.read("content.xml")
         ziparchive.close()

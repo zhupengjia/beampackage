@@ -46,14 +46,14 @@ avestack::avestack(int sizeinput){
     end_pointer=0;
     buffersize=0;
     for(i=0;i<2;i++){
-	tot[i]=0;
-	astack[i]=new float[size+1];
+      tot[i]=0;
+      astack[i]=new float[size+1];
     }
 }
 
 avestack::~avestack(){
     for(i=0;i<2;i++){
-	delete[] astack[i];
+      delete[] astack[i];
     }
 }
 
@@ -70,16 +70,16 @@ bool avestack::isfull(){
 }
 
 void avestack::empty(){
-	for(i=0;i<2;i++) tot[i]=0;
-	start_pointer=0;
-	end_pointer=0;
-	buffersize=0;
+      for(i=0;i<2;i++) tot[i]=0;
+      start_pointer=0;
+      end_pointer=0;
+      buffersize=0;
 }
 
 void avestack::push(float x,float y=0){
     if(buffersize>=size){
-	for(i=0;i<2;i++) tot[i]-=astack[i][end_pointer];
-	end_pointer=end_pointer<size?end_pointer+1:0;
+      for(i=0;i<2;i++) tot[i]-=astack[i][end_pointer];
+      end_pointer=end_pointer<size?end_pointer+1:0;
     }
     else buffersize++;
     astack[0][start_pointer]=x;
@@ -98,9 +98,9 @@ float avestack::getrms(int xy=0){
     ave=getave(xy);
     totrms=0;
     for(i=0;i<buffersize;i++){
-	pointer=(end_pointer+i>size)?end_pointer+i-size-1:end_pointer+i;
-	purev=xy>1?isqrt(astack[0][pointer]*astack[0][pointer]+astack[1][pointer]*astack[1][pointer])-ave:astack[xy][pointer]-ave;
-	totrms+=purev*purev;
+      pointer=(end_pointer+i>size)?end_pointer+i-size-1:end_pointer+i;
+      purev=xy>1?isqrt(astack[0][pointer]*astack[0][pointer]+astack[1][pointer]*astack[1][pointer])-ave:astack[xy][pointer]-ave;
+      totrms+=purev*purev;
     }
     return isqrt(totrms/buffersize);
 }

@@ -7,15 +7,15 @@ class bcmconst(odsread):
     def __init__(self,filename="bcm calibration.ods"):
         link="http://hallaweb.jlab.org/experiment/g2p/collaborators/pzhu/wiki/pyDB/bcm%20calibration.ods"
         if not os.path.exists(filename):
-	    dbdir=os.getenv("BEAMDBPATH")
-	    if dbdir==None:
-		print "please define BEAMDBPATH in your env"
-		return False
-	    pydb=os.path.join(dbdir,"pyDB")
-	    if not os.path.exists(pydb):os.makedirs(pydb)
-	    filename=os.path.join(pydb,filename)
-	    if not os.path.exists(filename):
-		urllib.urlretrieve(link,filename)
+          dbdir=os.getenv("BEAMDBPATH")
+          if dbdir==None:
+            print "please define BEAMDBPATH in your env"
+            return False
+          pydb=os.path.join(dbdir,"pyDB")
+          if not os.path.exists(pydb):os.makedirs(pydb)
+          filename=os.path.join(pydb,filename)
+          if not os.path.exists(filename):
+            urllib.urlretrieve(link,filename)
         odsread.__init__(self,filename)
         self.parse("bcm")
 
@@ -51,9 +51,9 @@ class bcmconst(odsread):
     def getconst(self,run,device,updown,clock="fast",quiet=False):
         cols=self.findcol(run,device,updown)
         if not cols:
-	    if not quiet:
-		print "can not find constant for run %i,device %s %s, check run number, maybe it is broken during that time"%(run,device,updown)
-            return False
+          if not quiet:
+            print "can not find constant for run %i,device %s %s, check run number, maybe it is broken during that time"%(run,device,updown)
+          return False
         if device=="happex":clk=""
         else:
             if clock=="fast":clk="fstclk"
@@ -73,11 +73,11 @@ class bcmconst(odsread):
                     except ValueError:
                         continue
                     consts.append([slope,ped])
-    	 	break
+                break
         if len(consts)==0:
-	    if not quiet:
-		print "bcm constant not exists for run %i,%s %sclock %sstream"%(run,device,clock,updown)
-            return False
+          if not quiet:
+            print "bcm constant not exists for run %i,%s %sclock %sstream"%(run,device,clock,updown)
+          return False
         slope=0
         ped=0
         for i in range(len(consts)):
@@ -90,37 +90,37 @@ class bcmconst(odsread):
 #const is (slope,ped),unit is uA
 def getcurr(rate,const,device,clock="slow"):
     if not const:
-	return numpy.nan
+      return numpy.nan
     if device=="happex":
-	return const[0]*(rate-const[1])*875/1041.65
+      return const[0]*(rate-const[1])*875/1041.65
     elif device=="sis3801":
-	return const[0]*(rate-const[1]*103700*971.65e-6)/1041.65e-6
+      return const[0]*(rate-const[1]*103700*971.65e-6)/1041.65e-6
     else:
-	if clock=="fast":clockrate=103700
-	else:clockrate=1024
-	return const[0]*(rate-const[1]*clockrate)
+      if clock=="fast":clockrate=103700
+      else:clockrate=1024
+      return const[0]*(rate-const[1]*clockrate)
 
 #count is total count, clockcnt is total clock count(happex is total entry),unit is uC
 def getcharge(count,clockcnt,const,device,clock="fast"):
     if not const:
-	return numpy.nan
+      return numpy.nan
     if device=="happex":
-	return const[0]*875e-6*(count-const[1]*clockcnt)
+      return const[0]*875e-6*(count-const[1]*clockcnt)
     else:
-	return const[0]*(count-const[1]*clockcnt)
+      return const[0]*(count-const[1]*clockcnt)
 
 #get raw value from current
 def curr2raw(curr,const,device,clock="fast"):
     if not const:
-	return numpy.nan
+      return numpy.nan
     if device=="happex":
-	return curr*1041.65/875/const[0]+const[1]
+      return curr*1041.65/875/const[0]+const[1]
     elif device=="sis3801":
-	return curr*1041.65e-6/const[0]+const[1]*103700*971.65e-6
+      return curr*1041.65e-6/const[0]+const[1]*103700*971.65e-6
     else:
-	if clock=="fast":clockrate=103700
-	else:clockrate=1024
-	return curr/const[0]+const[1]*clockrate
+      if clock=="fast":clockrate=103700
+      else:clockrate=1024
+      return curr/const[0]+const[1]*clockrate
 
 if __name__ == '__main__':
     bcmconstfile="/home/pzhu/work/run record/bcm calibration.ods"

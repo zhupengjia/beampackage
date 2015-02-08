@@ -11,11 +11,11 @@
 2013.3.14 fixed some bugs,updated database
 ---------------
 2013.3.1 updated for new happex decoder in g2plib
-	fixed some bugs
+      fixed some bugs
 ---------------
 2013.2.15 added runinfo.py, which used to read period.ods and runcurr.pkl that contains the current, survey, orbit info
-	added harppeak.py,which used to read harppeaks.ods that contains harp epak data and find peak from harp raw data
-	cleaned bpmcalib.py,bpminsert.py,bpmpeak.py to combine two new class
+      added harppeak.py,which used to read harppeaks.ods that contains harp epak data and find peak from harp raw data
+      cleaned bpmcalib.py,bpminsert.py,bpmpeak.py to combine two new class
 ----------------
 2013.2.1 changed the method for beam move judgement,better now for fastbus ADC
 ----------------
@@ -24,23 +24,23 @@
 2012.12.13 Added angle insert for target position 
 ----------------
 2012.12.7 updated database read function, now run period in database support like 5000-5700,5703,5705~5709,5712 5715, here "~","-"," " is same
-	now you can generate your own database for your own special run by using import in your database, for example you want to use different target z,just create a file named "bpm_yourrunnumber_0 or 1.dat" and insert the lines below to the file:
-"	avail run period:5555-5557
-	target z position:-7mm
-	import bpm_5494_0.dat          "
-	then it will use run period and target z in this file and read others in bpm_5494_0.dat file.
+      now you can generate your own database for your own special run by using import in your database, for example you want to use different target z,just create a file named "bpm_yourrunnumber_0 or 1.dat" and insert the lines below to the file:
+"      avail run period:5555-5557
+      target z position:-7mm
+      import bpm_5494_0.dat          "
+      then it will use run period and target z in this file and read others in bpm_5494_0.dat file.
 ----------------
 2012.12.6 bpminsert changed to build a branch for each leaf from save all leaves to one branch because tree2ascii class for optics don't support it.
 ----------------
 2012.12.4 fixed bugs in bpminsert for different events of branch and tree
-	fixed timezone different bug between remote and local in pacupdate,changed to 7200s for update trigger
-	added getcurrfromtree function, code will find current in tree if there have no curr info in database
+      fixed timezone different bug between remote and local in pacupdate,changed to 7200s for update trigger
+      added getcurrfromtree function, code will find current in tree if there have no curr info in database
 ----------------
 2012.12.4 fixed some bugs in pacupdate and bpminsert
 ----------------
 2012.12.3 use environment file for configuration file
-	fixed some bugs for download
-	will check all needed python modules now
+      fixed some bugs for download
+      will check all needed python modules now
 ----------------
 2012.11.26  Hello everybody,miss you again!
 ----------------
