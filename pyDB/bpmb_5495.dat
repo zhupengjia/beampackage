@@ -1,0 +1,18 @@
+All of the survey info directly come from survey data,please read survey report to get the detail info about the coordinate
+Please contact pengjia immediately if you have any questions(email,gtalk,phone...)
+keywords: 0503 50nA 65,64,0,0 left
+
+------------------------------------------------
+
+avail run period:3544-3802,3808-4057,4080-4088,4118,4121,4128,4132,4136,5506,5515,5524,5533,5538,5495,5441-5442,5661-5662
+avail curr(nA):38 80
+target z position(mm,support multi):-14.135 0 14.135 -10.81 -13.6271 -12.5476
+pedestal peak:16580.273438 43736.359375 59984.285156 20182.765625
+offset:-7289.000000 -37410.000000 -22009.000000 -8786.000000
+bpmb ar,gx,gy:34.924999999999997 0.954300000000000 0.692500000000000
+fitorder:1 1
+bpmb x a,b,c:-0.040809820216621 1.076666441388195 -0.133412683763429
+bpmb y a,b,c:-0.039968666893642 1.268720025331301 -0.146506724200229
+fval:1.0176027 0.7991438
+bpmb x err:0.165567 0.035834 0.040959
+bpmb y err:0.176237 0.030880 0.035074
