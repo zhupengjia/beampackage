@@ -780,23 +780,24 @@ def rasterconstreadfromfile(filename,dbread=False):
     if importfile:return constread(importfile,dbread)
     else:return dbread      
       
-def rasterconstread(run):
+def rasterconstread(run,happex=False):
     dbdir=os.getenv("BEAMDBPATH")
+    basename="hapraster" if happex else "raster"
     if dbdir==None:
       print "please define BEAMDBPATH in your env"
       return False
     pydb=os.path.join(dbdir,"pyDB")
     if not os.path.exists(pydb):os.makedirs(pydb)
-    datfiles=glob.glob(os.path.join(pydb,"raster_*.dat"))
+    datfiles=glob.glob(os.path.join(pydb,"%s_*.dat"%basename))
     calruns=[]
     for datfile in datfiles:
       calruns.append(int(re.split("[_.]",os.path.split(datfile)[1])[-2]))
     calruns=sortrun(run,calruns)
     for calrun in calruns:
-      const=rasterconstreadfromfile(os.path.join(pydb,"raster_%i.dat"%calrun))
+      const=rasterconstreadfromfile(os.path.join(pydb,"%s_%i.dat"%(basename,calrun)))
       if run in const["period"]:
           del const["period"]
-          const["constfile"]="raster_%i.dat"%calrun
+          const["constfile"]="%s_%i.dat"%(basename,calrun)
           return const
     print "sorry no raster calibration constant available for run %i,please contact pengjia"%run
     return False
