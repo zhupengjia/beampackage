@@ -239,13 +239,13 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
       tgtpos={}
       for z in tgtz:
           tgtpos[z]=zload(pp.getpath("pos","tgt%i"%z,run))
-    #deal bizarre events, if label of leev larger than the size of existed raster info
-    bizarre=rootfileinfo[rf]["leev"]>=len(rasterraw[0]) 
-    rootfileinfo[rf]["leev"][bizarre]=len(rasterraw[0]) -1
     #get pos for each rootfile
     print "get positions for each event for rootfile"
     for rf in rootfileinfo.keys():
       if rootfileinfo[rf]["avail"]:
+          #deal bizarre events, if label of leev larger than the size of existed raster info
+          bizarre=rootfileinfo[rf]["leev"]>=len(rasterraw[0]) 
+          rootfileinfo[rf]["leev"][bizarre]=len(rasterraw[0])-1
           if constavail:
             rootfileinfo[rf]["curr"]=curr[rootfileinfo[rf]["lhapev"]].astype(numpy.float32)
             rootfileinfo[rf]["bpmavail"]=bpmavail[rootfileinfo[rf]["lhapev"]].astype(numpy.int32)
