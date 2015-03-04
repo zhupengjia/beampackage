@@ -1,9 +1,9 @@
 raster calibration constant database, including size, fastclock
 ------------------------------------------------
 
-avail run period:3200-3295
+avail run period:3296-3956
 fastclock rate:103920
 function rebuild:0 0
 target z position(mm,dont change it):0
-slow raster x slope:-0.000851690
-slow raster y slope:-0.000724325
+slow raster x slope:-0.000153656644473
+slow raster y slope:-0.000123750382658

@@ -2,7 +2,7 @@ raster calibration constant database, including size, fastclock
 
 ------------------------------------------------
 
-avail run period:22273-22375
+avail run period:22273-22987
 fastclock rate:103920
 #set to 1 if want to rebuild raster function instead of using ADC value directly, first is fast raster,second is slow raster
 function rebuild:0 0

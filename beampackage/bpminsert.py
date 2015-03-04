@@ -13,12 +13,12 @@ from signalfilter import *
 def removebranch(tree,branchname):
     removeb=tree.GetBranch(branchname)
     removel=tree.GetLeaf(branchname)
-    if removeb:
-      tree.GetListOfBranches().Remove(removeb)
-      tree.GetListOfBranches().Compress()
     if removel:
       tree.GetListOfLeaves().Remove(removel)
       tree.GetListOfLeaves().Compress()
+    if removeb:
+      tree.GetListOfBranches().Remove(removeb)
+      tree.GetListOfBranches().Compress()
     
 #prepare the transported function from bpms to target, combine with *.c code
 def bpmbeamdriftprep(runorbit,tgtz,path=os.path.join(os.getenv("BEAMDBPATH"),"pyDB")):
@@ -78,6 +78,7 @@ def bpminsertparaprep(runpath,treename="T",forcefastbus=False):
     return para
 
 #insert the bpm info to existed rootfile
+#separatefile: 0 insert into existed rootfile; 1 create a new rootfile in bpm tree, -1 create a new rootfile with same structure in T tree, <-1 not insert
 #additional should be a dict, like {leafname:pklfilename}, pklfile should be a numpy array and aligned with beam events, or {leafname:[varpklfile,evnumpklfile]}, varpklfile is a numpy array and aligned with events array in evnumpklfile.pklfile can also add id/key like pklfilename~evnum, means pklfilename['evnum'] will be read 
 def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False,backup=True,additional={}):
     constavail=True
@@ -112,11 +113,14 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
                 shutil.copy(runpath+"_bak",runpath)
           except Exception as err:
             raise Exception("file %s abnormal"%runpath)
+    elif separatefile==-1:
+        bpmrootdir=os.path.join(rootfilepath,"kin")
+        if not os.path.exists(bpmrootdir):os.makedirs(bpmrootdir)
     #scan rootfile events
     eventleaf="fEvtHdr.fEvtNum" #event number
     rootfileinfo={}
     firstevent,lastevent=-1,-1
-    if separatefile==0:
+    if separatefile<=0:
       t1=time.time()
       for rf in rootfiles:
           print "scan total events for rootfile %s"%rf
@@ -161,9 +165,9 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
       if separatefile>0:
           fillbpmrawtree(run,rootfilepath,"bpmpos")
           return
-      elif separatefile<0:return
+      elif separatefile<-1:return
     else:
-      if separatefile!=0:return
+      if separatefile!=0 or separatefile!=-1:return #for fault position(gep)
     #load additional pkls
     def recpkl(v,keys): #recursion to get final value from var
       if len(keys)<1:return v
@@ -267,7 +271,6 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
                   #for fast raster, x and y need to exchange
                   rootfileinfo[rf][z][0]=rootfileinfo[rf][z][0]+(rasterraw[1][rootfileinfo[rf]["leev"]]-rastercenter[1])*rasterslope[0][z]
                   rootfileinfo[rf][z][1]=rootfileinfo[rf][z][1]+(rasterraw[0][rootfileinfo[rf]["leev"]]-rastercenter[0])*rasterslope[1][z]
-                  print "hi"
                 if Iraster[1] and z in rasterconst["tgtz"]:
                   #for slow raster, x and y need to exchange
                   rootfileinfo[rf][z][0]=rootfileinfo[rf][z][0]+(rasterraw[3][rootfileinfo[rf]["leev"]]-rastercenter[3])*rasterslope[2][z]
@@ -301,34 +304,65 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
       #for 2Hz pos
       for x in ["x","y"]:
           ltgt[z].append(arm+"rb.tgtave_%s_%s"%(key,x))
-    #insert
-    for rf in rootfileinfo.keys():
-      if rootfileinfo[rf]["avail"]:
-          rootfile=ROOT.TFile(rf,"UPDATE")
-          tree=rootfile.Get(treename)
-          #remove old branch
-          print "remove old branch"
-          removebranch(tree,arm+"rb.bpmavail")
-          removebranch(tree,arm+"rb.curr")
-          for z in tgtz:
+    #remove old branch
+    def removebpmbranch(tree):
+        print "remove old branch"
+        removebranch(tree,arm+"rb.bpmavail")
+        removebranch(tree,arm+"rb.curr")
+        for z in tgtz:
             for x in range(6):#for 2Hz pos
                 removebranch(tree,ltgt[z][x])
-          for k in additionalkeys:
+        for k in additionalkeys:
             removebranch(tree,k)
-          #branch
-          Vdata=[array("i",[0]),array("f",[0])]
-          branch=[tree.Branch(arm+"rb.bpmavail",Vdata[0],arm+"rb.bpmavail/I"),\
-            tree.Branch(arm+"rb.curr",Vdata[1],arm+"rb.curr/F")]
-          nbranch=2
-          for z in tgtz:
+    #create branch and tree for separatefile=-1
+    if separatefile==-1:
+        #remove leaves in original rootfile
+        for rf in rootfileinfo.keys():
+            if rootfileinfo[rf]["avail"]:
+                rootfile=ROOT.TFile(rf,"UPDATE")
+                tree=rootfile.Get(treename)
+                removebpmbranch(tree)
+                tree.Write("",ROOT.TObject.kOverwrite)
+                del tree
+                rootfile.Close()  
+        bpmrootfile=ROOT.TFile(os.path.join(bpmrootdir,"bpm_%i.root"%run),"RECREATE")
+        tree=ROOT.TTree(treename,treename)
+        #branch
+        Vdata=[array("i",[0]),array("f",[0])]
+        branch=[tree.Branch(arm+"rb.bpmavail",Vdata[0],arm+"rb.bpmavail/I"),\
+        tree.Branch(arm+"rb.curr",Vdata[1],arm+"rb.curr/F")]
+        nbranch=2
+        for z in tgtz:
             for x in range(6):#for 2Hz pos
                 nbranch+=1
                 Vdata.append(array("f",[0]))
                 branch.append(tree.Branch(ltgt[z][x],Vdata[nbranch-1],ltgt[z][x]+"/F"))
-          for k in additionalkeys:
+        for k in additionalkeys:
             nbranch+=1
             Vdata.append(array("d",[0]))
             branch.append(tree.Branch(k,Vdata[nbranch-1],k+"/D"))
+
+    #insert
+    for rf in rootfileinfo.keys():
+      if rootfileinfo[rf]["avail"]:
+          if separatefile==0:
+              rootfile=ROOT.TFile(rf,"UPDATE")
+              tree=rootfile.Get(treename)
+              removebpmbranch(tree)
+              #branch
+              Vdata=[array("i",[0]),array("f",[0])]
+              branch=[tree.Branch(arm+"rb.bpmavail",Vdata[0],arm+"rb.bpmavail/I"),\
+              tree.Branch(arm+"rb.curr",Vdata[1],arm+"rb.curr/F")]
+              nbranch=2
+              for z in tgtz:
+                  for x in range(6):#for 2Hz pos
+                      nbranch+=1
+                      Vdata.append(array("f",[0]))
+                      branch.append(tree.Branch(ltgt[z][x],Vdata[nbranch-1],ltgt[z][x]+"/F"))
+              for k in additionalkeys:
+                  nbranch+=1
+                  Vdata.append(array("d",[0]))
+                  branch.append(tree.Branch(k,Vdata[nbranch-1],k+"/D"))
           print "inserting bpm info to file %s"%rf
           tt1=time.time()
           for e in range(rootfileinfo[rf]["events"]):
@@ -343,14 +377,22 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
             for k in additionalkeys:
                 vd+=1
                 Vdata[vd][0]=rootfileinfo[rf][k][e]
-            for i in range(nbranch):
-                branch[i].Fill()
-          tree.Write("",ROOT.TObject.kOverwrite)
+            if separatefile==0:
+                for i in range(nbranch):
+                    branch[i].Fill()
+            else:
+                tree.Fill()
+          if separatefile==0:
+              tree.Write("",ROOT.TObject.kOverwrite)
+              del tree,branch
+              rootfile.Close()  
           tt2=time.time()
           print "done for inserting file %s"%rf
           print "use time:",tt2-tt1
-          rootfile.Close()      
-          del tree,branch
+    if separatefile==-1:
+        tree.Write("",ROOT.TObject.kOverwrite)
+        bpmrootfile.Close()      
+        del tree,branch
       
 #calculate the positions at bpms and target
 def getposfromraw(para,runpath,treename="T",firstevent=-1,lastevent=-1,forceredecode=0,forcefastbus=False):
