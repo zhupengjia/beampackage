@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import re,urllib,os,glob,sys,numpy,zlib
+import re,urllib,os,glob,sys,numpy,zlib,hashlib
 from odsread import odsread
 try:import cPickle as pickle
 except:import pickle
@@ -863,6 +863,20 @@ def checkdb(filename,link="http://hallaweb.jlab.org/experiment/g2p/collaborators
          # print "sorry can not download %s,please check your network connection"%filename
          # return False
     return filename
+    
+#md5
+def md5_file(name):
+    with open(name, 'rb') as f:
+        try:f.seek(- 4096 * 1024, 2)# for large file,only read last 4mb 
+        except:pass
+        md5=hashlib.md5(f.read()).hexdigest()
+    #print name,md5
+    return md5
+    
+def md5_files(filearray):
+    md5=""
+    for f in filearray:md5+=md5_file(f)
+    return hashlib.md5(md5).hexdigest()[:6]
 
 #compress pickle file by using zlib and cpickle
 def zdump(value,filename):

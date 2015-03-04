@@ -139,8 +139,9 @@ class decode:
 
     def getrootfilefamily(self):
       self.rootfiles=glob.glob(os.path.join(self.rootfilepath,self.runfilename.replace(".root","_*.root")))
-      self.rootfiles.append(os.path.join(self.rootfilepath,self.runfilename))
+      self.rootfiles.append(self.runpath)
       self.rootfiles.sort()
+      print "rootfile family",self.rootfiles
 
     #check if needed redecode
     def checkifredecode(self):
@@ -168,13 +169,23 @@ class decode:
           self.pklon["fbbpm"]=False
       if not self.forceredecode:
           hapeventpkl=self.pp.getpath(self.pklprefix,"hapevent",self.run)
+          pklonbak=self.pklon
           if os.path.exists(hapeventpkl):
             hapevent=zload(hapeventpkl)
-            print "rootfile event:%i-%i,pkl hapevent:%i-%i"%(self.firstevent,self.lastevent,hapevent[0],hapevent[-1])
-            if (self.firstevent<0 or hapevent[0]-self.firstevent<eventtolerate) and (self.lastevent<0 or self.lastevent-hapevent[-1]<eventtolerate):
+            print "rootfile event:%i-%i,pkl hapevent:%i-%i"%(self.firstevent,self.lastevent,hapevent.min(),hapevent.max())
+            if (self.firstevent<0 or hapevent.min()-self.firstevent<eventtolerate) and (self.lastevent<0 or self.lastevent-hapevent.max()<eventtolerate):
                 for key in self.pklpathn[0]:
                   pklpath=self.pp.getpath(self.pklprefix,key,self.run)
                   if os.path.exists(pklpath):
+                      datas=zload(pklpath)
+                      Ndatas=len(datas)
+                      if Ndatas<10:Ndatas=len(datas[0])
+                      if Ndatas!=len(hapevent):
+                          print "not matched events, force replay"
+                          self.forceredecode=1
+                          self.pklon=pklonbak
+                          del datas
+                          break
                       print "file %s exists, set %s to False"%(pklpath,key)
                       self.pklon[key]=False
                   else:
@@ -185,11 +196,20 @@ class decode:
           eventpkl=self.pp.getpath(self.pklprefix,"event",self.run)
           if os.path.exists(eventpkl):
             event=zload(eventpkl)
-            print "rootfile event:%i-%i,pkl event:%i-%i"%(self.firstevent,self.lastevent,event[0],event[-1])
-            if (self.firstevent<0 or event[0]-self.firstevent<eventtolerate) and (self.lastevent<0 or self.lastevent-event[-1]<eventtolerate):
+            print "rootfile event:%i-%i,pkl event:%i-%i"%(self.firstevent,self.lastevent,event.min(),event.max())
+            if (self.firstevent<0 or event.min()-self.firstevent<eventtolerate) and (self.lastevent<0 or self.lastevent-event.max()<eventtolerate):
                 for key in self.pklpathn[1]:
                   pklpath=self.pp.getpath(self.pklprefix,key,self.run)
                   if os.path.exists(pklpath):
+                      datas=zload(pklpath)
+                      Ndatas=len(datas)
+                      if Ndatas<10:Ndatas=len(datas[0])
+                      if Ndatas!=len(event):
+                          print "not matched events, force replay"
+                          self.forceredecode=1
+                          self.pklon=pklonbak
+                          del datas
+                          break
                       print "file %s exists, set %s to False"%(pklpath,key)
                       self.pklon[key]=False
                   else:
@@ -355,10 +375,10 @@ class decode:
           bcmraw=np.zeros(2,dtype=np.int32)
           #decode from rootfile
           for e in xrange(events[runpath]):
-            if e%1000==0:
-                print "decoding %i events, %i left"%(e,events[runpath]-e)
             trees[runpath].GetEntry(e)
             ee=leventleaf.GetValue()
+            if e%1000==0:
+                print "decoding %i events, %i left, %i"%(e,events[runpath]-e,ee)
             if self.pklon["event"]:
                 event[enorm]=ee
             if self.pklon["clock"]:

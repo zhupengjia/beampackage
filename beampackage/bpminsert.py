@@ -6,7 +6,7 @@ except:print "Error!! pyroot didn't compiled! please recompile your root!"
 from array import array
 from bcmconst import *
 from harppos import bpmpos
-from runinfo import runinfo,getpklpath,rasterconstread,zload,zdump
+from runinfo import runinfo,getpklpath,rasterconstread,zload,zdump,md5_files
 from signalfilter import *
 
 #remove the existed branch
@@ -100,59 +100,74 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
     if len(rootfiles)<1:
       print "can not find file %s,will try to insert as separate file"%runpath
       separatefile=1
-    #backup rootfile
+    #backup rootfilse
     if separatefile==0:
-      for runpath in rootfiles:
+      for f in rootfiles:
           try:
-            if not os.path.exists(runpath+"_bak"):
+            if not os.path.exists(f+"_bak"):
                 if backup:
-                  print "back up rootfile %s"%runpath
-                  shutil.copy(runpath,runpath+"_bak")
+                  print "back up rootfile %s"%f
+                  shutil.copy(f,f+"_bak")
             else:
-                print "restore rootfile %s"%runpath
-                shutil.copy(runpath+"_bak",runpath)
+                print "restore rootfile %s"%f
+                shutil.copy(f+"_bak",f)
           except Exception as err:
-            raise Exception("file %s abnormal"%runpath)
+            raise Exception("file %s abnormal"%f)
     elif separatefile==-1:
         bpmrootdir=os.path.join(rootfilepath,"kin")
         if not os.path.exists(bpmrootdir):os.makedirs(bpmrootdir)
     #scan rootfile events
     eventleaf="fEvtHdr.fEvtNum" #event number
-    rootfileinfo={}
     firstevent,lastevent=-1,-1
     if separatefile<=0:
       t1=time.time()
-      for rf in rootfiles:
-          print "scan total events for rootfile %s"%rf
-          rootfile=ROOT.TFile(rf,"READ")
-          rootfileinfo[rf]={}
-          if rootfile.IsZombie():
-            print "Error!! file %s is abnormal, please check if it is a valid rootfile! pass it..."%rf
-            rootfileinfo[rf]["avail"]=False
-            continue
-          try:
-            tree=rootfile.Get(treename)
-            events=tree.GetEntries()
-            leventleaf=tree.GetLeaf(eventleaf)
-          except:
-            print "Error!! file %s is abnormal, please check if it is a valid rootfile! pass it..."%rf
-            rootfileinfo[rf]["avail"]=False
-            continue
-          rootfileinfo[rf]["avail"]=True
-          rootfileinfo[rf]["events"]=events
-          evnums=numpy.zeros(events,dtype=numpy.int32)
-          for e in range(events):
-            if e%10000==0:
-                print "scanning events %i %i"%(e,events-e)
-            tree.GetEntry(e)
-            evnums[e]=leventleaf.GetValue()
-          rootfileinfo[rf]["evnum"]=evnums
-          if firstevent<0 or evnums[0]<firstevent:
-            firstevent=evnums[0]
-          if lastevent<0 or evnums[-1]>lastevent:
-            lastevent=evnums[-1]
-          del evnums
-          rootfile.Close()
+      #check md5
+      md5=md5_files(rootfiles)
+      scanfile=pp.getpath("file",md5,run,1)
+      if os.path.exists(scanfile):
+          rootfileinfo=zload(scanfile)
+          events=0
+          for f in rootfileinfo.keys():
+              events+=rootfileinfo[f]["events"]
+              if firstevent<0 or rootfileinfo[f]["evnum"].min()<firstevent:
+                  firstevent=rootfileinfo[f]["evnum"].min()
+              if lastevent<0 or rootfileinfo[f]["evnum"].max()>lastevent:
+                  lastevent=rootfileinfo[f]["evnum"].max() 
+      else:
+          #scan
+          rootfileinfo={}
+          for rf in rootfiles:
+              print "scan total events for rootfile %s"%rf
+              rootfile=ROOT.TFile(rf,"READ")
+              rootfileinfo[rf]={}
+              if rootfile.IsZombie():
+                print "Error!! file %s is abnormal, please check if it is a valid rootfile! pass it..."%rf
+                rootfileinfo[rf]["avail"]=False
+                continue
+              try:
+                tree=rootfile.Get(treename)
+                events=tree.GetEntries()
+                leventleaf=tree.GetLeaf(eventleaf)
+              except:
+                print "Error!! file %s is abnormal, please check if it is a valid rootfile! pass it..."%rf
+                rootfileinfo[rf]["avail"]=False
+                continue
+              rootfileinfo[rf]["avail"]=True
+              rootfileinfo[rf]["events"]=events
+              evnums=numpy.zeros(events,dtype=numpy.int32)
+              for e in range(events):
+                if e%10000==0:
+                    print "scanning events %i %i"%(e,events-e)
+                tree.GetEntry(e)
+                evnums[e]=leventleaf.GetValue()
+              rootfileinfo[rf]["evnum"]=evnums
+              if firstevent<0 or evnums.min()<firstevent:
+                firstevent=evnums.min()
+              if lastevent<0 or evnums.max()>lastevent:
+                lastevent=evnums.max()
+              del evnums
+              rootfile.Close()
+          zdump(rootfileinfo,scanfile)      
       if lastevent-firstevent<1000:
           print "less than 1000 events found in your rootfile:",rootfiles,"will try to insert as separate"
           separatefile=1
@@ -196,6 +211,7 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
     #sort events
     hapevent=zload(pp.getpath("raw","hapevent",run))
     eevent=zload(pp.getpath("raw","event",run))
+    #print eevent
     for rf in rootfileinfo.keys():
       if rootfileinfo[rf]["avail"]:
           #rootfileinfo[rf]["eevoff"]=bisect.bisect_left(eevent,rootfileinfo[rf]["evnum"][0]) event offset
@@ -204,10 +220,12 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
           rootfileinfo[rf]["leev"]=numpy.where(rootfileinfo[rf]["leev"]<len(eevent),rootfileinfo[rf]["leev"],len(eevent)-1) 
           rootfileinfo[rf]["lhapev"]=numpy.searchsorted(hapevent,rootfileinfo[rf]["evnum"]) #sort event
           rootfileinfo[rf]["lhapev"]=numpy.where(rootfileinfo[rf]["lhapev"]<len(hapevent),rootfileinfo[rf]["lhapev"],len(hapevent)-1) #use rootfileinfo if condition else len(hapevent)
+          #print rf,eevent,rootfileinfo[rf]["evnum"],rootfileinfo[rf]["leev"],rootfileinfo[rf]["lhapev"]
           for k in additionalkeys:
             if len(additional[k])<5:#for the additional info that dodn't aligned with beam event
                 rootfileinfo[rf]["ev"+k]=numpy.searchsorted(additional[k][1],rootfileinfo[rf]["evnum"])
                 rootfileinfo[rf]["ev"+k]=numpy.where(rootfileinfo[rf]["ev"+k]<len(additional[k][1]),rootfileinfo[rf]["ev"+k],len(additional[k][1])-1)
+    #return
     #check raster on/off
     Iraster=[info.getsqlinfo(run,s) for s in ["FastRasterIx","FastRasterIy","SlowRasterIx","SlowRasterIy"]]
     Iraster=[False if i==None or i==0 else True for i in Iraster]
@@ -247,13 +265,9 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
     print "get positions for each event for rootfile"
     for rf in rootfileinfo.keys():
       if rootfileinfo[rf]["avail"]:
-          #deal bizarre events, if label of leev larger than the size of existed raster info
-          bizarre=rootfileinfo[rf]["leev"]>=len(rasterraw[0]) 
-          rootfileinfo[rf]["leev"][bizarre]=len(rasterraw[0])-1
           if constavail:
             rootfileinfo[rf]["curr"]=curr[rootfileinfo[rf]["lhapev"]].astype(numpy.float32)
             rootfileinfo[rf]["bpmavail"]=bpmavail[rootfileinfo[rf]["lhapev"]].astype(numpy.int32)
-            rootfileinfo[rf]["bpmavail"][bizarre]=0 #set bizarre events not available
           else:
             rootfileinfo[rf]["curr"]=numpy.zeros(len(rootfileinfo[rf]["evnum"]),dtype=numpy.float32)+current
             rootfileinfo[rf]["bpmavail"]=numpy.zeros(len(rootfileinfo[rf]["evnum"]),dtype=numpy.int32)
