@@ -11,14 +11,17 @@ from signalfilter import *
 
 #remove the existed branch
 def removebranch(tree,branchname):
-    removeb=tree.GetBranch(branchname)
-    removel=tree.GetLeaf(branchname)
-    if removel:
-      tree.GetListOfLeaves().Remove(removel)
-      tree.GetListOfLeaves().Compress()
-    if removeb:
-      tree.GetListOfBranches().Remove(removeb)
-      tree.GetListOfBranches().Compress()
+    try:
+        removeb=tree.GetBranch(branchname)
+        removel=tree.GetLeaf(branchname)
+        if removel:
+          tree.GetListOfLeaves().Remove(removel)
+          tree.GetListOfLeaves().Compress()
+        if removeb:
+          tree.GetListOfBranches().Remove(removeb)
+          tree.GetListOfBranches().Compress()
+    except Exception as err:
+        print err
     
 #prepare the transported function from bpms to target, combine with *.c code
 def bpmbeamdriftprep(runorbit,tgtz,path=os.path.join(os.getenv("BEAMDBPATH"),"pyDB")):
@@ -80,7 +83,9 @@ def bpminsertparaprep(runpath,treename="T",forcefastbus=False):
 #insert the bpm info to existed rootfile
 #separatefile: 0 insert into existed rootfile; 1 create a new rootfile in bpm tree, -1 create a new rootfile with same structure in T tree, <-1 not insert
 #additional should be a dict, like {leafname:pklfilename}, pklfile should be a numpy array and aligned with beam events, or {leafname:[varpklfile,evnumpklfile]}, varpklfile is a numpy array and aligned with events array in evnumpklfile.pklfile can also add id/key like pklfilename~evnum, means pklfilename['evnum'] will be read 
-def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False,backup=True,additional={}):
+#if set removebpmleaves to True, will remove bpm leaves first before insert, otherwise will overwrite. 
+#removeaddleaves is the list of the additional leaves that need to be removed
+def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False,backup=True,additional={},removebpmleaves=True,removeaddleaves=[]):
     constavail=True
     para=bpminsertparaprep(runpath,treename,forcefastbus)
     if not para["calconst"]["a"]:
@@ -328,17 +333,21 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
                 removebranch(tree,ltgt[z][x])
         for k in additionalkeys:
             removebranch(tree,k)
+        for k in removeaddleaves:
+            print "remove",k
+            removebranch(tree,k)
     #create branch and tree for separatefile=-1
     if separatefile==-1:
         #remove leaves in original rootfile
-        for rf in rootfileinfo.keys():
-            if rootfileinfo[rf]["avail"]:
-                rootfile=ROOT.TFile(rf,"UPDATE")
-                tree=rootfile.Get(treename)
-                removebpmbranch(tree)
-                tree.Write("",ROOT.TObject.kOverwrite)
-                del tree
-                rootfile.Close()  
+        if removebpmleaves:
+            for rf in rootfileinfo.keys():
+                if rootfileinfo[rf]["avail"]:
+                    rootfile=ROOT.TFile(rf,"UPDATE")
+                    tree=rootfile.Get(treename)
+                    removebpmbranch(tree)
+                    tree.Write("",ROOT.TObject.kOverwrite)
+                    del tree
+                    rootfile.Close()
         bpmrootfile=ROOT.TFile(os.path.join(bpmrootdir,"bpm_%i.root"%run),"RECREATE")
         tree=ROOT.TTree(treename,treename)
         #branch
@@ -362,7 +371,7 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
           if separatefile==0:
               rootfile=ROOT.TFile(rf,"UPDATE")
               tree=rootfile.Get(treename)
-              removebpmbranch(tree)
+              if removebpmleaves:removebpmbranch(tree)
               #branch
               Vdata=[array("i",[0]),array("f",[0])]
               branch=[tree.Branch(arm+"rb.bpmavail",Vdata[0],arm+"rb.bpmavail/I"),\
@@ -380,7 +389,7 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
           print "inserting bpm info to file %s"%rf
           tt1=time.time()
           for e in range(rootfileinfo[rf]["events"]):
-            if e%1000==0:print "filling %i events,%i left"%(e,rootfileinfo[rf]["events"]-e)
+            if e%10000==0:print "filling %i events,%i left"%(e,rootfileinfo[rf]["events"]-e)
             Vdata[0][0]=rootfileinfo[rf]["bpmavail"][e]
             Vdata[1][0]=rootfileinfo[rf]["curr"][e]
             vd=1

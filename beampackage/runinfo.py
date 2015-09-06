@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import re,urllib,os,glob,sys,numpy,zlib,hashlib
+import re,urllib,os,glob,sys,numpy,zlib,hashlib,sqlite3
 from odsread import odsread
 try:import cPickle as pickle
 except:import pickle
@@ -514,7 +514,7 @@ class runinfo(odsread):
             if not silent:print "using calibration dat file %s for run %i"%(constfile,run)
             const["constfile"]=os.path.split(constfile)[1]
             #del const["period"]
-            #del const["curr"]
+            #del const["curr"]bpmconst
             return const
           else:
             if not silent: "sorry no bpm %s calibration constant available for run %i,please contact pengjia"%(ab,run)
@@ -869,7 +869,7 @@ def md5_file(name):
     with open(name, 'rb') as f:
         try:f.seek(- 4096 * 1024, 2)# for large file,only read last 4mb 
         except:pass
-        md5=hashlib.md5(f.read()).hexdigest()
+        md5=hashlib.md5(f.read()).hexdigest()+hashlib.md5(name).hexdigest()
     #print name,md5
     return md5
     

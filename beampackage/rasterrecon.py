@@ -7,10 +7,12 @@ from harppos import bpmpos
 from runinfo import runinfo,getpklpath,sortrun,zload,zdump
 from bpminsert import tgtpos_straight,tgtpos_field,bpminsertparaprep
 from signalfilter import decode
+from matplotlib import pyplot
 
 class rasterrecon:
     def __init__(self):
       ROOT.gROOT.SetBatch(True)
+      ROOT.gStyle.SetOptStat(0)
       self.fastclkrate=103910
       #self.fastclkrate=103858
       self.shape=ROOT.TF1("pol1","pol1")
@@ -65,12 +67,19 @@ class rasterrecon:
       a=hmax
       xmax=h1.GetXaxis().GetXmax()
       xmin=h1.GetXaxis().GetXmin()
-      r=(xmax-xmin)/2.
+      r=(xmax-xmin)/2
+      h1.SetTitle("")
+      h1.GetXaxis().SetTitle("ADC value")
+      h1.GetYaxis().SetTitle("Count")
+      h1.GetXaxis().SetTitleOffset(0.6)
+      h1.GetYaxis().SetTitleOffset(0.7)
+      h1.GetXaxis().SetTitleSize(0.07)
+      h1.GetYaxis().SetTitleSize(0.07)
       #multitimes fit:
       c,r,a=multifits(h1,shapefit,c,r,a,xmin,xmax,hmax)
       #if not os.path.exists("pic"):os.makedirs("pic")
       if chan<4:
-          c1.Print("pic/%srastersize_%i_%i_%i_%i.png"%(self.rastertype,chan,self.run,eventrange[0],eventrange[1]),"png")
+          c1.Print("pic/%srastersize_%i_%i_%i_%i.png"%(self.rastertype,chan,self.run,eventrange[0],eventrange[1]))
       else:
           ab="a" if ab==0 else "b"
           xy="x" if xy==0 else "y"
@@ -408,12 +417,13 @@ class fastrecon:
       
 class rastercalib:
     #general raster size,parameter: raster class, raster x,y magnet z pos,...
-    def __rastersizecalib(self,raster,rasterz,rastertype,runpaths,eventsplits):
+    def __rastersizecalib(self,raster,rasterz,rastertype,runpaths,eventsplits,bpmeventsplits):
       ROOT.gROOT.SetBatch(True)
       #get run info
       para=bpminsertparaprep(runpaths[0])
-      survey=para["survey"]
+      info=runinfo()
       self.run=para["run"]
+      survey=[info.bpmasurvey(self.run),info.bpmbsurvey(self.run)]
       if not hasattr(self,'tgtz'):
           self.tgtz=para["tgtz"]
       #get data
@@ -427,6 +437,8 @@ class rastercalib:
           for s in eventsplits[i]:
             s=[int(a) for a in s]
             size.append(rasters[-1].getsize(s))
+          for s in bpmeventsplits[i]:
+            s=[int(a) for a in s]
             sizeinbpm.append(rasters[-1].getsizeinbpm(s))
             datanum+=1
       rx,ry,bax,bay,bbx,bby=array('d'),array('d'),array('d'),array('d'),array('d'),array('d')
@@ -491,12 +503,17 @@ class rastercalib:
       g1.append(ROOT.TGraph(len(ry),ry,bay))
       g1.append(ROOT.TGraph(len(rx),rx,bbx))
       g1.append(ROOT.TGraph(len(ry),ry,bby))
-      c1=ROOT.TCanvas("c1","%s raster size calibration"%rastertype,1280,800)
-      c1.Divide(2,2)
       pol1=ROOT.TF1("pol1","pol1")
       slope,ped,rbpmvstgt,sizeconst=[],[],[],[]
       for i in range(4):
-          c1.cd(i+1)
+          c1=ROOT.TCanvas("c1","%s raster size calibration"%rastertype,1280,800)
+          g1[i].SetTitle("")
+          g1[i].GetXaxis().SetTitle("Raster (ADC)")
+          g1[i].GetYaxis().SetTitle("BPM (mm)")
+          g1[i].GetXaxis().SetTitleOffset(0.6)
+          g1[i].GetYaxis().SetTitleOffset(0.6)
+          g1[i].GetXaxis().SetTitleSize(0.07)
+          g1[i].GetYaxis().SetTitleSize(0.07)
           g1[i].Draw("A*")
           g1[i].Fit("pol1")
           ped.append(pol1.GetParameter(0))
@@ -507,13 +524,13 @@ class rastercalib:
           for j in range(len(self.tgtz)):
             rbpmvstgt[-1].append((rasterz[i%2]+self.tgtz[j])/(rasterz[i%2]-survey[int(i/2)][0][2]))
             sizeconst[-1].append([rbpmvstgt[-1][-1]*slope[i],rbpmvstgt[-1][-1]*ped[i],rastercenter[i%2]])
-      c1.Print("pic/%scalib_%i.png"%(rastertype,self.run),"png")
+          c1.Print("pic/%scalib_%i_%i.eps"%(rastertype,self.run,i))
       #only use bpm A right now,will edit after improve bpm resolution
       return sizeconst[:2]
       
-    def slowrastersizecalib(self,runpaths,eventsplits):
+    def slowrastersizecalib(self,runpaths,eventsplits,bpmeventsplits):
       rasterz=[20888.667,20059.467] #slow raster x,y magnet z position(g2p hall coordinate,from yves' orbit file)
-      self.slowsizeconst=self.__rastersizecalib(slrecon(),rasterz,"slow",runpaths,eventsplits)
+      self.slowsizeconst=self.__rastersizecalib(slrecon(),rasterz,"slow",runpaths,eventsplits,bpmeventsplits)
       
     def fastrastersizecalib(self,runpaths,eventsplits):
       rasterz=[22122.967,21622.967] #fast raster x,y magnet z position(g2p hall coordinate,from yves' orbit file)

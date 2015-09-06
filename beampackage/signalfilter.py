@@ -37,7 +37,7 @@ def signalave(raw,avefreq):
     fs=960.015 #trigger rate,here is helicity rate
     if 2*avefreq>=fs:return raw
     aveevents=int(fs/avefreq)
-    Vave=Cavestack(aveevents)
+    Vave=avestack(aveevents)
     rawlen=len(raw)
     averaw=np.zeros(rawlen,dtype=np.float32)
     for i in range(rawlen):
@@ -103,6 +103,23 @@ class Cavestack:
         return self.avestack_ave(self._a_new,ctypes.c_int(xy))
     def rms(self,xy=0):
         return self.avestack_rms(self._a_new,ctypes.c_int(xy))
+
+#same usage as Cavestack, use numpy instead of c class
+class avestack:
+    def __init__(self,size):
+        self.size=size
+        self.buf=numpy.zeros(size)
+        self.counter=0
+        self.point=0
+    def push(self,data):
+        self.buf[self.point]=data
+        self.point=(self.point+1)%self.size
+        self.counter+=1
+    def ave(self):
+        if self.counter<self.size:
+            return numpy.mean(self.buf[:self.counter])
+        else:
+            return numpy.mean(self.buf)
 
 #get raw data from rootfile,save it to pkl file and return as dict type,bpm signal dealt with filter
 #filter1 used to get average pos,filter2 used to get raw pos that can see slow raster signal
@@ -513,7 +530,7 @@ def fillbpmrawtree(run,rootpath,fileprefix="bpmraw"):
     print "filling bpm raw trees for run %i"%run
     ##pkl file list
     pp=getpklpath(rootpath)
-    pklfilen=[["rbpm","hapraster","sbpm","ssbpm","fbpm","curr","hapevent","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event","fbbpm"]]
+    pklfilen=[["rbpm","hapraster","sbpm","ssbpm","sabpm","fbpm","curr","hapevent","bpmavail","sbpmavail","fbpmavail"],["raster","clock","event","fbbpm"]]
     datatypes=["bpm","raster"]
     for p in range(len(pklfilen)):
       for f in range(len(pklfilen[p])):pklfilen[p][f]="raw_"+pklfilen[p][f]

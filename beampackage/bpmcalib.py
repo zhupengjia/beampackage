@@ -358,12 +358,14 @@ class bpmcalib:
           axes[i].yaxis.set_major_locator(majorLocator)
           axes[i].xaxis.set_minor_locator(minorLocator)
           axes[i].yaxis.set_minor_locator(minorLocator)
+          axes[i].set_xlabel("u(mm)")
+          axes[i].set_ylabel("v(mm)")
       try:
           fig.suptitle("%inA,using %s"%(self.curr,self.constfile["b"]))
           construn=re.split("[_.]",self.constfile["b"])[1]
-          savefig("pic/points%i_%inA_%s.png"%(sorted(self.run)[0],self.curr,construn))
+          savefig("pic/points%i_%inA_%s.eps"%(sorted(self.run)[0],self.curr,construn))
       except:
-          savefig("pic/points%i.png"%(sorted(self.run)[0]))
+          savefig("pic/points%i.eps"%(sorted(self.run)[0]))
       
     def ovalfun(self,x,a,b,c):
       #par:a center,b radius,c entries radius

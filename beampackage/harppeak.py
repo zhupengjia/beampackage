@@ -45,7 +45,7 @@ def genharppeak(datapath,rootfilepath):
     filename.sort()
     ROOT.gROOT.Reset()
     ROOT.gROOT.SetBatch(True)
-    rootfile = TFile(os.path.join(rootfilepath,"harpdata.root"),"RECREATE")
+    rootfile = ROOT.TFile(os.path.join(rootfilepath,"harpdata.root"),"RECREATE")
     s=ROOT.TSpectrum()
     leaves,tree,branches,Vleaves,Vharp=[],[],[],[],[]
 
@@ -58,7 +58,8 @@ def genharppeak(datapath,rootfilepath):
       Vharp.append(array("f",[0.0,0.0,0.0]))
       branches.append(tree[i].Branch(fakename,Vharp[i],Vleaves[i]))
       #fill tree
-      hfile=os.path.join(datapath,filename[i])
+      rawname=filename[i].replace(":","_")
+      hfile=os.path.join(datapath,rawname)
       print "filling %s"%hfile
       for line in open(hfile,'r'):
             if line.startswith("#"): continue
@@ -75,7 +76,7 @@ def genharppeak(datapath,rootfilepath):
     t.SetTextAlign(10)
     t.SetTextSize(0.03)
     for j in range(len(filename)):
-      fakename=filename[j].replace(":","").replace(".","_")
+      fakename="G"+filename[j].replace(":","").replace(".","_")
       c.append(ROOT.TCanvas(fakename,"harp signal %s"%filename[j],1280,800))
       c[j].Divide(2,1)
       c[j].cd(1)
@@ -83,6 +84,7 @@ def genharppeak(datapath,rootfilepath):
       tree[j].Fit("fitpol","pos:index","pos>0","QR")
       p0=fitpol.GetParameter(0)
       p1=fitpol.GetParameter(1)
+      tree[j].Draw("pos:index","pos>0")
       c[j].cd(2)
       tree[j].Draw("sig:%f+index*%f"%(p0,p1))
       graph=ROOT.gPad.GetPrimitive("Graph")
@@ -99,7 +101,7 @@ def genharppeak(datapath,rootfilepath):
       peak.sort()
       yaxismax=h[j].GetMaximum()
       yaxismin=h[j].GetMinimum()
-      tree[j].Draw("sig-%f:pos"%mean,"","same")
+      tree[j].Draw("sig-%f:pos"%mean,"","sameL")
       for k in range(nfound):
           print peak[k],
           t.DrawLatex(7,yaxismax-0.035*k*(yaxismax-yaxismin),"%i, %f"%(k+1,peak[k]))
