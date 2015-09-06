@@ -54,56 +54,6 @@ def getmemory():
             return int(re.split("[:kB]","".join(re.split("\s",line)))[1])*1000
     except:return 2054132000
 
-#used to average the signal, combine with Cavestack.c and signalave function 
-class Cavestack:
-    def __init__(self,size=7500,ransize=0):
-      try:
-          self._a=ctypes.CDLL(os.path.join(os.path.split(__file__)[0],"Cavestack.so"))
-      except Exception as e:
-          print e
-          raise Exception("attention!!!!!!!!!!please run \"make\" in beampackage folder!!!!!!!!!!")
-      if ransize<=0:
-          self._a_new=self._a.avestack_new(ctypes.c_int(size))
-          self.avestack_del=self._a.avestack_del
-          self.avestack_isfull=self._a.avestack_isfull
-          self.avestack_isempty=self._a.avestack_isempty
-          self.avestack_getsize=self._a.avestack_getsize
-          self.avestack_empty=self._a.avestack_empty
-          self.avestack_push=self._a.avestack_push
-          self.avestack_ave=self._a.avestack_ave
-          self.avestack_rms=self._a.avestack_rms
-      else:
-          self._a_new=self._a.ravestack_new(ctypes.c_int(size),ctypes.c_int(ransize))
-          self.avestack_del=self._a.ravestack_del
-          self.avestack_isfull=self._a.ravestack_isfull
-          self.avestack_isempty=self._a.ravestack_isempty
-          self.avestack_getsize=self._a.ravestack_getsize
-          self.avestack_empty=self._a.ravestack_empty
-          self.avestack_push=self._a.ravestack_push
-          self.avestack_ave=self._a.ravestack_ave
-          self.avestack_rms=self._a.ravestack_rms
-      self.avestack_isfull.restype=ctypes.c_bool
-      self.avestack_isempty.restype=ctypes.c_bool
-      self.avestack_getsize.restype=ctypes.c_int
-      self.avestack_ave.restype=ctypes.c_float
-      self.avestack_rms.restype=ctypes.c_float
-    def __del__(self):
-        self.avestack_del(self._a_new)
-    def isfull(self):
-        return self.avestack_isfull(self._a_new)
-    def isempty(self):
-        return self.avestack_isempty(self._a_new)
-    def getsize(self):
-        return self.avestack_getsize(self._a_new)
-    def empty(self):
-        self.avestack_empty(self._a_new)
-    def push(self,x,y=0):
-        self.avestack_push(self._a_new,ctypes.c_float(x),ctypes.c_float(y))
-    def ave(self,xy=0):
-        return self.avestack_ave(self._a_new,ctypes.c_int(xy))
-    def rms(self,xy=0):
-        return self.avestack_rms(self._a_new,ctypes.c_int(xy))
-
 #same usage as Cavestack, use numpy instead of c class
 class avestack:
     def __init__(self,size):

@@ -531,58 +531,58 @@ def getposfromraw(para,runpath,treename="T",firstevent=-1,lastevent=-1,forcerede
           tt2=time.time()
           print tt2-tt1,"secs used"
     #split beam move
-    skipcal=False
-    if os.path.exists(pp.getpath(posprefix,pklpathn_rms,run)) and not forceredecode:
-      rms_pure=zload(pp.getpath(posprefix,pklpathn_rms,run))
-      if len(rms_pure)==rawdataentries and os.path.exists(pp.getpath(posprefix,pklpathn_split,run)):
-          skipcal=True
-          beamsplit=zload(pp.getpath(posprefix,pklpathn_split,run))
-      del rms_pure
-      gc.collect()
-    if not skipcal:
-      posrms={}
-      print "getting beam sharp move info for run %i........."%run
-      tt10=time.time()
-      aveevents,aveeventsbg=1000,300
-      sbpmabpm=zload(pp.getpath(posprefix,"sbpmabpm",run))
-      bpmavail=zload(pp.getpath(rawprefix,"bpmavail",run))
+    #skipcal=False
+    #if os.path.exists(pp.getpath(posprefix,pklpathn_rms,run)) and not forceredecode:
+    #  rms_pure=zload(pp.getpath(posprefix,pklpathn_rms,run))
+    #  if len(rms_pure)==rawdataentries and os.path.exists(pp.getpath(posprefix,pklpathn_split,run)):
+    #      skipcal=True
+    #      beamsplit=zload(pp.getpath(posprefix,pklpathn_split,run))
+    #  del rms_pure
+    #  gc.collect()
+    #if not skipcal:
+      #posrms={}
+      #print "getting beam sharp move info for run %i........."%run
+      #tt10=time.time()
+      #aveevents,aveeventsbg=1000,300
+      #sbpmabpm=zload(pp.getpath(posprefix,"sbpmabpm",run))
+      #bpmavail=zload(pp.getpath(rawprefix,"bpmavail",run))
       
-      rawevents=len(sbpmabpm[0])
-      rms_pure=numpy.zeros(rawevents,dtype=numpy.float32)
-      Vbpmave,Vbpmavebg=Cavestack(aveevents),Cavestack(aveeventsbg)
-      for i in range(rawevents):
-          if i%10000==0:print "generated %i rms events, %i events left"%(i,rawevents-i)
-          if not bpmavail[i]:
-            rms_pure[i]=-0.03
-            continue
-          Vbpmave.push(sbpmabpm[0][i],sbpmabpm[1][i])
-          Vbpmavebg.push(sbpmabpm[0][i],sbpmabpm[1][i])
-          rms1,rms2=Vbpmave.rms(0),Vbpmave.rms(1)
-          rmsbg1,rmsbg2=Vbpmavebg.rms(0),Vbpmavebg.rms(1)
-          rms_pure[i]=abs(rms1-rmsbg1)+abs(rms2-rmsbg2)
-      del sbpmabpm,bpmavail,Vbpmave,Vbpmavebg
-      try:zdump(rms_pure,pp.getpath(posprefix,pklpathn_rms,run,1))
-      except:sys.exit("\n\n\n\nError!failed to dump,do you have write permission in dir %s?"%rootfilepath)
-      gc.collect() #recycle memory
-      moveentries=getposrms(rms_pure)
-      del rms_pure
+      #rawevents=len(sbpmabpm[0])
+      #rms_pure=numpy.zeros(rawevents,dtype=numpy.float32)
+      #Vbpmave,Vbpmavebg=avestack(aveevents),avestack(aveeventsbg)
+      #for i in range(rawevents):
+      #    if i%10000==0:print "generated %i rms events, %i events left"%(i,rawevents-i)
+      #    if not bpmavail[i]:
+      #      rms_pure[i]=-0.03
+      #      continue
+      #    Vbpmave.push(sbpmabpm[0][i],sbpmabpm[1][i])
+      #    Vbpmavebg.push(sbpmabpm[0][i],sbpmabpm[1][i])
+      #    rms1,rms2=Vbpmave.rms(0),Vbpmave.rms(1)
+      #    rmsbg1,rmsbg2=Vbpmavebg.rms(0),Vbpmavebg.rms(1)
+      #    rms_pure[i]=abs(rms1-rmsbg1)+abs(rms2-rmsbg2)
+      #del sbpmabpm,bpmavail,Vbpmave,Vbpmavebg
+      #try:zdump(rms_pure,pp.getpath(posprefix,pklpathn_rms,run,1))
+      #except:sys.exit("\n\n\n\nError!failed to dump,do you have write permission in dir %s?"%rootfilepath)
+      #gc.collect() #recycle memory
+      #moveentries=getposrms(rms_pure)
+      #del rms_pure
       #gc.collect() #recycle memory
       #totposmove
-      print "getting beam slow move info for run %i........."%run
-      ssbpmabpm=zload(pp.getpath(posprefix,"ssbpmabpm",run))
-      totpos=numpy.sqrt(ssbpmabpm[0]**2+ssbpmabpm[1]**2)
-      moveentries=getposslowmove(totpos,moveentries)
-      del ssbpmabpm,totpos
-      gc.collect() #recycle memory
+      #print "getting beam slow move info for run %i........."%run
+      #ssbpmabpm=zload(pp.getpath(posprefix,"ssbpmabpm",run))
+      #totpos=numpy.sqrt(ssbpmabpm[0]**2+ssbpmabpm[1]**2)
+      #moveentries=getposslowmove(totpos,moveentries)
+      #del ssbpmabpm,totpos
+      #gc.collect() #recycle memory
       #get corresponded events
       #hapevent=zload(pklpath_raw["hapevent"])
-      moveevents=[map(lambda x:hapevent[x],e) for e in moveentries]
+      #moveevents=[map(lambda x:hapevent[x],e) for e in moveentries]
       #del hapevent
       #gc.collect() #recycle memory
-      beamsplit={"splitevents":moveevents,"splitentries":moveentries}
-      zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
-      tt11=time.time()
-      print tt11-tt10,"secs used"
+      #beamsplit={"splitevents":moveevents,"splitentries":moveentries}
+      #zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
+      #tt11=time.time()
+      #print tt11-tt10,"secs used"
     ##get position at target
     #check which z is not inserted
     print "checking if tgt position calculated......"
@@ -630,20 +630,20 @@ def getposfromraw(para,runpath,treename="T",firstevent=-1,lastevent=-1,forcerede
       tt9=time.time()
       print tt9-tt8,"secs used"
       #get average target position
-      print "getting average positions..."
-      for z in notinsertedz:
-          intz=int(z)
-          fn="tgt%i"%(intz)
-          beamsplit[fn]=[]
-          for i in range(len(beamsplit["splitentries"])):
-            entryrange=beamsplit["splitentries"][i]
-            avepos=[0,0,0,0,0]
-            for k in range(5):
-                avepos[k]=numpy.mean(tgtpos[intz][k][entryrange[0]:entryrange[1]])
-            beamsplit[fn].append(avepos)
-      zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
-      tt10=time.time()
-      print tt10-tt9,"secs used"
+      #print "getting average positions..."
+      #for z in notinsertedz:
+      #    intz=int(z)
+      #    fn="tgt%i"%(intz)
+         # beamsplit[fn]=[]
+         # for i in range(len(beamsplit["splitentries"])):
+         #   entryrange=beamsplit["splitentries"][i]
+         #   avepos=[0,0,0,0,0]
+         #   for k in range(5):
+         #       avepos[k]=numpy.mean(tgtpos[intz][k][entryrange[0]:entryrange[1]])
+         #   beamsplit[fn].append(avepos)
+      #zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
+      #tt10=time.time()
+      #print tt10-tt9,"secs used"
       del tgtpos
       gc.collect() #recycle memory
 
