@@ -11,14 +11,17 @@ from signalfilter import *
 
 #remove the existed branch
 def removebranch(tree,branchname):
-    removeb=tree.GetBranch(branchname)
-    removel=tree.GetLeaf(branchname)
-    if removel:
-      tree.GetListOfLeaves().Remove(removel)
-      tree.GetListOfLeaves().Compress()
-    if removeb:
-      tree.GetListOfBranches().Remove(removeb)
-      tree.GetListOfBranches().Compress()
+    try:
+        removeb=tree.GetBranch(branchname)
+        removel=tree.GetLeaf(branchname)
+        if removel:
+          tree.GetListOfLeaves().Remove(removel)
+          tree.GetListOfLeaves().Compress()
+        if removeb:
+          tree.GetListOfBranches().Remove(removeb)
+          tree.GetListOfBranches().Compress()
+    except Exception as err:
+        print err
     
 #prepare the transported function from bpms to target, combine with *.c code
 def bpmbeamdriftprep(runorbit,tgtz,path=os.path.join(os.getenv("BEAMDBPATH"),"pyDB")):
@@ -80,7 +83,9 @@ def bpminsertparaprep(runpath,treename="T",forcefastbus=False):
 #insert the bpm info to existed rootfile
 #separatefile: 0 insert into existed rootfile; 1 create a new rootfile in bpm tree, -1 create a new rootfile with same structure in T tree, <-1 not insert
 #additional should be a dict, like {leafname:pklfilename}, pklfile should be a numpy array and aligned with beam events, or {leafname:[varpklfile,evnumpklfile]}, varpklfile is a numpy array and aligned with events array in evnumpklfile.pklfile can also add id/key like pklfilename~evnum, means pklfilename['evnum'] will be read 
-def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False,backup=True,additional={}):
+#if set removebpmleaves to True, will remove bpm leaves first before insert, otherwise will overwrite. 
+#removeaddleaves is the list of the additional leaves that need to be removed
+def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0,forcefastbus=False,backup=True,additional={},removebpmleaves=True,removeaddleaves=[]):
     constavail=True
     para=bpminsertparaprep(runpath,treename,forcefastbus)
     if not para["calconst"]["a"]:
@@ -328,17 +333,21 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
                 removebranch(tree,ltgt[z][x])
         for k in additionalkeys:
             removebranch(tree,k)
+        for k in removeaddleaves:
+            print "remove",k
+            removebranch(tree,k)
     #create branch and tree for separatefile=-1
     if separatefile==-1:
         #remove leaves in original rootfile
-        for rf in rootfileinfo.keys():
-            if rootfileinfo[rf]["avail"]:
-                rootfile=ROOT.TFile(rf,"UPDATE")
-                tree=rootfile.Get(treename)
-                removebpmbranch(tree)
-                tree.Write("",ROOT.TObject.kOverwrite)
-                del tree
-                rootfile.Close()  
+        if removebpmleaves:
+            for rf in rootfileinfo.keys():
+                if rootfileinfo[rf]["avail"]:
+                    rootfile=ROOT.TFile(rf,"UPDATE")
+                    tree=rootfile.Get(treename)
+                    removebpmbranch(tree)
+                    tree.Write("",ROOT.TObject.kOverwrite)
+                    del tree
+                    rootfile.Close()
         bpmrootfile=ROOT.TFile(os.path.join(bpmrootdir,"bpm_%i.root"%run),"RECREATE")
         tree=ROOT.TTree(treename,treename)
         #branch
@@ -362,7 +371,7 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
           if separatefile==0:
               rootfile=ROOT.TFile(rf,"UPDATE")
               tree=rootfile.Get(treename)
-              removebpmbranch(tree)
+              if removebpmleaves:removebpmbranch(tree)
               #branch
               Vdata=[array("i",[0]),array("f",[0])]
               branch=[tree.Branch(arm+"rb.bpmavail",Vdata[0],arm+"rb.bpmavail/I"),\
@@ -380,7 +389,7 @@ def bpminsert(runpath,eventsinsert=0,treename="T",separatefile=0,forceredecode=0
           print "inserting bpm info to file %s"%rf
           tt1=time.time()
           for e in range(rootfileinfo[rf]["events"]):
-            if e%1000==0:print "filling %i events,%i left"%(e,rootfileinfo[rf]["events"]-e)
+            if e%10000==0:print "filling %i events,%i left"%(e,rootfileinfo[rf]["events"]-e)
             Vdata[0][0]=rootfileinfo[rf]["bpmavail"][e]
             Vdata[1][0]=rootfileinfo[rf]["curr"][e]
             vd=1
@@ -522,58 +531,58 @@ def getposfromraw(para,runpath,treename="T",firstevent=-1,lastevent=-1,forcerede
           tt2=time.time()
           print tt2-tt1,"secs used"
     #split beam move
-    skipcal=False
-    if os.path.exists(pp.getpath(posprefix,pklpathn_rms,run)) and not forceredecode:
-      rms_pure=zload(pp.getpath(posprefix,pklpathn_rms,run))
-      if len(rms_pure)==rawdataentries and os.path.exists(pp.getpath(posprefix,pklpathn_split,run)):
-          skipcal=True
-          beamsplit=zload(pp.getpath(posprefix,pklpathn_split,run))
-      del rms_pure
-      gc.collect()
-    if not skipcal:
-      posrms={}
-      print "getting beam sharp move info for run %i........."%run
-      tt10=time.time()
-      aveevents,aveeventsbg=1000,300
-      sbpmabpm=zload(pp.getpath(posprefix,"sbpmabpm",run))
-      bpmavail=zload(pp.getpath(rawprefix,"bpmavail",run))
+    #skipcal=False
+    #if os.path.exists(pp.getpath(posprefix,pklpathn_rms,run)) and not forceredecode:
+    #  rms_pure=zload(pp.getpath(posprefix,pklpathn_rms,run))
+    #  if len(rms_pure)==rawdataentries and os.path.exists(pp.getpath(posprefix,pklpathn_split,run)):
+    #      skipcal=True
+    #      beamsplit=zload(pp.getpath(posprefix,pklpathn_split,run))
+    #  del rms_pure
+    #  gc.collect()
+    #if not skipcal:
+      #posrms={}
+      #print "getting beam sharp move info for run %i........."%run
+      #tt10=time.time()
+      #aveevents,aveeventsbg=1000,300
+      #sbpmabpm=zload(pp.getpath(posprefix,"sbpmabpm",run))
+      #bpmavail=zload(pp.getpath(rawprefix,"bpmavail",run))
       
-      rawevents=len(sbpmabpm[0])
-      rms_pure=numpy.zeros(rawevents,dtype=numpy.float32)
-      Vbpmave,Vbpmavebg=Cavestack(aveevents),Cavestack(aveeventsbg)
-      for i in range(rawevents):
-          if i%10000==0:print "generated %i rms events, %i events left"%(i,rawevents-i)
-          if not bpmavail[i]:
-            rms_pure[i]=-0.03
-            continue
-          Vbpmave.push(sbpmabpm[0][i],sbpmabpm[1][i])
-          Vbpmavebg.push(sbpmabpm[0][i],sbpmabpm[1][i])
-          rms1,rms2=Vbpmave.rms(0),Vbpmave.rms(1)
-          rmsbg1,rmsbg2=Vbpmavebg.rms(0),Vbpmavebg.rms(1)
-          rms_pure[i]=abs(rms1-rmsbg1)+abs(rms2-rmsbg2)
-      del sbpmabpm,bpmavail,Vbpmave,Vbpmavebg
-      try:zdump(rms_pure,pp.getpath(posprefix,pklpathn_rms,run,1))
-      except:sys.exit("\n\n\n\nError!failed to dump,do you have write permission in dir %s?"%rootfilepath)
-      gc.collect() #recycle memory
-      moveentries=getposrms(rms_pure)
-      del rms_pure
+      #rawevents=len(sbpmabpm[0])
+      #rms_pure=numpy.zeros(rawevents,dtype=numpy.float32)
+      #Vbpmave,Vbpmavebg=avestack(aveevents),avestack(aveeventsbg)
+      #for i in range(rawevents):
+      #    if i%10000==0:print "generated %i rms events, %i events left"%(i,rawevents-i)
+      #    if not bpmavail[i]:
+      #      rms_pure[i]=-0.03
+      #      continue
+      #    Vbpmave.push(sbpmabpm[0][i],sbpmabpm[1][i])
+      #    Vbpmavebg.push(sbpmabpm[0][i],sbpmabpm[1][i])
+      #    rms1,rms2=Vbpmave.rms(0),Vbpmave.rms(1)
+      #    rmsbg1,rmsbg2=Vbpmavebg.rms(0),Vbpmavebg.rms(1)
+      #    rms_pure[i]=abs(rms1-rmsbg1)+abs(rms2-rmsbg2)
+      #del sbpmabpm,bpmavail,Vbpmave,Vbpmavebg
+      #try:zdump(rms_pure,pp.getpath(posprefix,pklpathn_rms,run,1))
+      #except:sys.exit("\n\n\n\nError!failed to dump,do you have write permission in dir %s?"%rootfilepath)
+      #gc.collect() #recycle memory
+      #moveentries=getposrms(rms_pure)
+      #del rms_pure
       #gc.collect() #recycle memory
       #totposmove
-      print "getting beam slow move info for run %i........."%run
-      ssbpmabpm=zload(pp.getpath(posprefix,"ssbpmabpm",run))
-      totpos=numpy.sqrt(ssbpmabpm[0]**2+ssbpmabpm[1]**2)
-      moveentries=getposslowmove(totpos,moveentries)
-      del ssbpmabpm,totpos
-      gc.collect() #recycle memory
+      #print "getting beam slow move info for run %i........."%run
+      #ssbpmabpm=zload(pp.getpath(posprefix,"ssbpmabpm",run))
+      #totpos=numpy.sqrt(ssbpmabpm[0]**2+ssbpmabpm[1]**2)
+      #moveentries=getposslowmove(totpos,moveentries)
+      #del ssbpmabpm,totpos
+      #gc.collect() #recycle memory
       #get corresponded events
       #hapevent=zload(pklpath_raw["hapevent"])
-      moveevents=[map(lambda x:hapevent[x],e) for e in moveentries]
+      #moveevents=[map(lambda x:hapevent[x],e) for e in moveentries]
       #del hapevent
       #gc.collect() #recycle memory
-      beamsplit={"splitevents":moveevents,"splitentries":moveentries}
-      zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
-      tt11=time.time()
-      print tt11-tt10,"secs used"
+      #beamsplit={"splitevents":moveevents,"splitentries":moveentries}
+      #zdump(beamsplit,pp.getpath(posprefix,pklpathn_split,run,1))
+      #tt11=time.time()
+      #print tt11-tt10,"secs used"
     ##get position at target
     #check which z is not inserted
     print "checking if tgt position calculated......"
