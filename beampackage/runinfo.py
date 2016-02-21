@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import re,urllib,os,glob,sys,numpy,zlib,hashlib,sqlite3
+import re,urllib,os,glob,sys,numpy,zlib,hashlib,sqlite3,shutil
 from odsread import odsread
 try:import cPickle as pickle
 except:import pickle
@@ -40,14 +40,19 @@ class runinfo(odsread):
     #sqlite
     def __initsql(self):
       if self.initsql:return
-      self.sqlfile=checkdb(self.sqlfile)
-      if not self.sqlfile:self.sqlavail=False
-      else:
-          con=sqlite3.connect(self.sqlfile)
-          con.row_factory = sqlite3.Row
-          self.cur=con.cursor()
-          self.result={}
-          self.sqlavail=True
+      tmpdb=os.path.join("/tmp",os.path.split(self.sqlfile)[-1])
+      if not os.path.exists(tmpdb):
+          self.sqlfile=checkdb(self.sqlfile)
+          if not self.sqlfile:
+              self.sqlavail=False
+              self.initsql=True
+              return
+          shutil.copyfile(self.sqlfile,tmpdb)
+      con=sqlite3.connect(tmpdb)
+      con.row_factory = sqlite3.Row
+      self.cur=con.cursor()
+      self.result={}
+      self.sqlavail=True
       self.initsql=True
     #init pkl file
     def __initpkl(self,key):
@@ -780,9 +785,10 @@ def rasterconstreadfromfile(filename,dbread=False):
     if importfile:return constread(importfile,dbread)
     else:return dbread      
       
-def rasterconstread(run,happex=False):
+def rasterconstread1(run,happex=False):
     dbdir=os.getenv("BEAMDBPATH")
-    basename="hapraster" if happex else "raster"
+    #basename="hapraster" if happex else "raster"
+    basename="raster" 
     if dbdir==None:
       print "please define BEAMDBPATH in your env"
       return False
@@ -801,6 +807,28 @@ def rasterconstread(run,happex=False):
           return const
     print "sorry no raster calibration constant available for run %i,please contact pengjia"%run
     return False
+
+def rasterconstread(run,happex=False):
+    if not happex:return rasterconstread1(run)
+    else:
+        const_fb=rasterconstread1(run)
+        const_hap=rasterconstread1(run,happex)
+        info=runinfo()
+        r0=info.getsqlinfo(run,"raster_hapfstratio_x") 
+        r1=info.getsqlinfo(run,"raster_hapfstratio_y")
+        if r0==None or r1==None:
+            orbit=info.orbit(run)
+            arm="left" if run<20000 else "right"
+            availruns=numpy.asarray(info.getruns(["orbit=%i"%orbit,"raster_hapfstratio_x is not NULL","raster_hapfstratio_y is not NULL"],arm))
+            if len(availruns)<1:
+                return const_hap
+            crun=availruns[numpy.argmin(abs(availruns-run))]
+            r0=info.getsqlinfo(crun,"raster_hapfstratio_x") 
+            r1=info.getsqlinfo(crun,"raster_hapfstratio_y")
+        if not const_fb:return False
+        const_hap["slxslope"][0]=const_fb["slxslope"][0]/r0
+        const_hap["slyslope"][0]=const_fb["slyslope"][0]/r1
+        return const_hap
 
 #get pkl file path
 class getpklpath:
